@@ -27,15 +27,42 @@ Sistema de controle financeiro pessoal com dashboard inteligente, metas de inves
 
 ## Instalação
 
-### 1. Criar o banco de dados
+### Opção A — Docker (recomendado)
 
-Abra o terminal e execute:
+Sobe o Postgres e a API juntos, sem instalar Postgres na máquina.
+
+```bash
+# 1. Defina uma senha local para o banco (NÃO commitar este arquivo)
+cp .env.docker.example .env.docker
+# edite .env.docker e preencha POSTGRES_PASSWORD com uma senha forte
+
+# 2. Configure o backend
+cd backend
+cp .env.example .env
+# edite backend/.env e ajuste DATABASE_URL para usar a senha definida em .env.docker
+#   DATABASE_URL="postgresql://postgres:SUA_SENHA_AQUI@localhost:5432/financas_db"
+cd ..
+
+# 3. Suba os containers
+docker compose up -d
+
+# 4. Aplique o schema e popule os planos
+docker compose exec api npm run db:generate
+docker compose exec api npm run db:push
+docker compose exec api npm run db:seed
+```
+
+A API fica em `http://localhost:3001`.
+
+### Opção B — Postgres local sem Docker
 
 ```bash
 "C:\Program Files\PostgreSQL\16\bin\psql.exe" -U postgres -c "CREATE DATABASE financas_db;"
 ```
 
-### 2. Backend
+Depois siga para a seção **Backend** abaixo.
+
+### Backend
 
 ```bash
 cd backend
@@ -43,8 +70,7 @@ npm install
 
 # Configurar variáveis de ambiente
 cp .env.example .env
-# O .env já está configurado para PostgreSQL local sem senha.
-# Ajuste DATABASE_URL se necessário.
+# Ajuste DATABASE_URL e JWT_SECRET antes de subir.
 
 # Gerar o Prisma Client e aplicar o schema
 npm run db:generate

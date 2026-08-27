@@ -12,11 +12,29 @@ Thumbs.db
 .env
 .env.local
 .env.*.local
+.env.docker
 .vscode/
 .idea/
 
 # Config local do Claude Code (não compartilhar)
+.claude/
 .claude/settings.local.json
+**/.claude/
 
-# Scripts auxiliares locais (não fazem parte do produto)
+# Scripts utilitários locais (smoke tests, debug, inspeção)
 smoke_tt.mjs
+_tmp_*.mjs
+_inspect*.mjs
+_*.mjs
+
+# Bancos de dados / dumps
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+*.sql
+*.dump
+
+# Volumes Docker / dados locais
+data/
+postgres_data/

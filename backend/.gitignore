@@ -3,6 +3,10 @@ node_modules/
 
 # Prisma — artefatos gerados
 prisma/migrations/dev.db*
+prisma/*.db
+prisma/*.db-journal
+prisma/*.sqlite
+prisma/*.sqlite3
 
 # Logs
 *.log
@@ -19,5 +23,11 @@ Thumbs.db
 .vscode/
 .idea/
 
+# Config local do Claude Code
+.claude/
+
 # Scripts utilitários locais
 smoke_tt.mjs
+_tmp_*.mjs
+_inspect*.mjs
+_*.mjs
