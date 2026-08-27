@@ -1,0 +1,23 @@
+# Dependências
+node_modules/
+
+# Prisma — artefatos gerados
+prisma/migrations/dev.db*
+
+# Logs
+*.log
+server.log
+
+# Ambiente
+.env
+.env.local
+.env.*.local
+
+# OS / editores
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# Scripts utilitários locais
+smoke_tt.mjs

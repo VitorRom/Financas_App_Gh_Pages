@@ -1,0 +1,343 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id                     String                  @id @default(uuid()) @db.Uuid
+  email                  String                  @unique @db.VarChar(254)
+  passwordHash           String                  @db.VarChar(100)
+  name                   String?                 @db.VarChar(255)
+  createdAt              DateTime                @default(now()) @db.Timestamptz(6)
+  updatedAt              DateTime                @updatedAt @db.Timestamptz(6)
+  accounts               Account[]
+  categories             Category[]
+  goals                  Goal[]
+  importBatches          ImportBatch[]
+  investments            Investment[]
+  investmentGoals        InvestmentGoal[]
+  investmentTransactions InvestmentTransaction[]
+  merchantRules          MerchantRule[]
+  planningItems          PlanningItem[]
+  subscription           Subscription?
+  transactions           Transaction[]
+}
+
+model Plan {
+  id              String         @id @default(uuid()) @db.Uuid
+  name            String         @unique @db.VarChar(50)
+  displayName     String         @db.VarChar(100)
+  price           Decimal        @db.Decimal(10, 2)
+  maxTransactions Int?
+  maxAccounts     Int?
+  features        String
+  isActive        Boolean        @default(true)
+  createdAt       DateTime       @default(now()) @db.Timestamptz(6)
+  subscriptions   Subscription[]
+}
+
+model Subscription {
+  id                   String    @id @default(uuid()) @db.Uuid
+  userId               String    @unique @db.Uuid
+  planId               String    @db.Uuid
+  status               String    @default("active") @db.VarChar(50)
+  stripeSubscriptionId String?   @db.VarChar(255)
+  stripeCustomerId     String?   @db.VarChar(255)
+  currentPeriodStart   DateTime? @db.Timestamptz(6)
+  currentPeriodEnd     DateTime? @db.Timestamptz(6)
+  createdAt            DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt            DateTime  @updatedAt @db.Timestamptz(6)
+  plan                 Plan      @relation(fields: [planId], references: [id])
+  user                 User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([planId])
+}
+
+model Category {
+  id            String         @id @default(uuid()) @db.Uuid
+  name          String         @db.VarChar(100)
+  type          String         @db.VarChar(50)
+  color         String         @default("#6366f1") @db.VarChar(30)
+  icon          String         @default("tag") @db.VarChar(50)
+  createdAt     DateTime       @default(now()) @db.Timestamptz(6)
+  updatedAt     DateTime       @updatedAt @db.Timestamptz(6)
+  userId        String         @db.Uuid
+  user          User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  merchantRules MerchantRule[]
+  transactions  Transaction[]
+
+  @@unique([userId, name, type])
+  @@index([userId])
+  @@index([userId, type])
+}
+
+model Account {
+  id            String        @id @default(uuid()) @db.Uuid
+  name          String        @db.VarChar(150)
+  type          String        @db.VarChar(50)
+  balance       Decimal       @default(0) @db.Decimal(14, 2)
+  color         String        @default("#10b981") @db.VarChar(30)
+  createdAt     DateTime      @default(now()) @db.Timestamptz(6)
+  updatedAt     DateTime      @updatedAt @db.Timestamptz(6)
+  userId        String        @db.Uuid
+  user          User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  importBatches ImportBatch[]
+  investments   Investment[]
+  transactions  Transaction[]
+
+  @@index([userId])
+  @@index([userId, type])
+}
+
+model Transaction {
+  id               String       @id @default(uuid()) @db.Uuid
+  description      String       @db.VarChar(500)
+  amount           Decimal      @db.Decimal(14, 2)
+  type             String       @db.VarChar(50)
+  date             DateTime     @default(now()) @db.Timestamptz(6)
+  notes            String?
+  internalTransfer Boolean      @default(false)
+  createdAt        DateTime     @default(now()) @db.Timestamptz(6)
+  updatedAt        DateTime     @updatedAt @db.Timestamptz(6)
+  userId           String       @db.Uuid
+  categoryId       String?      @db.Uuid
+  accountId        String?      @db.Uuid
+  importBatchId    String?      @db.Uuid
+  account          Account?     @relation(fields: [accountId], references: [id])
+  category         Category?    @relation(fields: [categoryId], references: [id])
+  importBatch      ImportBatch? @relation(fields: [importBatchId], references: [id])
+  user             User         @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, date])
+  @@index([userId, type])
+  @@index([userId, accountId])
+  @@index([userId, categoryId])
+}
+
+model ImportBatch {
+  id           String        @id @default(uuid()) @db.Uuid
+  filename     String        @db.VarChar(500)
+  bank         String?       @db.VarChar(100)
+  createdAt    DateTime      @default(now()) @db.Timestamptz(6)
+  userId       String        @db.Uuid
+  accountId    String        @db.Uuid
+  account      Account       @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  user         User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactions Transaction[]
+
+  @@index([userId, createdAt])
+  @@index([accountId, createdAt])
+}
+
+model MerchantRule {
+  id         String   @id @default(uuid()) @db.Uuid
+  key        String   @db.VarChar(500)
+  matchType  String   @default("contains") @db.VarChar(50)
+  type       String?  @db.VarChar(50)
+  enabled    Boolean  @default(true)
+  createdAt  DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt  DateTime @updatedAt @db.Timestamptz(6)
+  userId     String   @db.Uuid
+  categoryId String   @db.Uuid
+  category   Category @relation(fields: [categoryId], references: [id])
+  user       User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@unique([userId, key, matchType, type])
+  @@index([userId, enabled, key])
+  @@index([userId, type, enabled])
+}
+
+model Goal {
+  id                  String            @id @default(uuid()) @db.Uuid
+  name                String            @db.VarChar(255)
+  years               Int
+  monthlyRatePct      Decimal           @db.Decimal(8, 4)
+  targetFinalValue    Decimal           @db.Decimal(14, 2)
+  monthlyContribution Decimal           @db.Decimal(14, 2)
+  startDate           DateTime          @default(now()) @db.Timestamptz(6)
+  createdAt           DateTime          @default(now()) @db.Timestamptz(6)
+  updatedAt           DateTime          @updatedAt @db.Timestamptz(6)
+  userId              String            @db.Uuid
+  user                User              @relation(fields: [userId], references: [id], onDelete: Cascade)
+  installments        GoalInstallment[]
+
+  @@index([userId])
+}
+
+model GoalInstallment {
+  id               String   @id @default(uuid()) @db.Uuid
+  monthIndex       Int
+  paymentDate      DateTime @db.Timestamptz(6)
+  monthLabel       String   @db.VarChar(30)
+  contribution     Decimal  @db.Decimal(14, 2)
+  ratePct          Decimal  @db.Decimal(8, 4)
+  investedTotal    Decimal  @db.Decimal(14, 2)
+  projectedBalance Decimal  @db.Decimal(14, 2)
+  status           String   @default("Pendente") @db.VarChar(50)
+  createdAt        DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt        DateTime @updatedAt @db.Timestamptz(6)
+  goalId           String   @db.Uuid
+  goal             Goal     @relation(fields: [goalId], references: [id], onDelete: Cascade)
+
+  @@unique([goalId, monthIndex])
+  @@index([goalId, monthIndex])
+  @@index([goalId, status])
+}
+
+model PlanningItem {
+  id             String   @id @default(uuid()) @db.Uuid
+  name           String   @db.VarChar(255)
+  amount         Decimal  @db.Decimal(14, 2)
+  type           String   @db.VarChar(50)
+  dayOfMonth     Int      @default(1)
+  enabled        Boolean  @default(true)
+  createdAt      DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt      DateTime @updatedAt @db.Timestamptz(6)
+  userId         String   @db.Uuid
+  monthsDuration Int?
+  startMonth     Int?     @default(0)
+  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([userId, enabled])
+}
+
+model Investment {
+  id              String                  @id @default(uuid()) @db.Uuid
+  assetType       AssetType
+  ticker          String?                 @db.VarChar(80)
+  name            String                  @db.VarChar(120)
+  broker          String?                 @db.VarChar(80)
+  quantity        Decimal                 @default(0) @db.Decimal(18, 8)
+  averagePrice    Decimal                 @default(0) @db.Decimal(14, 2)
+  currentPrice    Decimal?                @db.Decimal(14, 2)
+  lastPriceUpdate DateTime?               @db.Timestamptz(6)
+  indexer         Indexer?
+  interestRate    Decimal?                @db.Decimal(8, 4)
+  maturityDate    DateTime?               @db.Timestamptz(6)
+  liquidityDays   Int?
+  purchaseDate    DateTime                @db.Timestamptz(6)
+  notes           String?
+  isActive        Boolean                 @default(true)
+  createdAt       DateTime                @default(now()) @db.Timestamptz(6)
+  updatedAt       DateTime                @updatedAt @db.Timestamptz(6)
+  userId          String                  @db.Uuid
+  accountId       String?                 @db.Uuid
+  account         Account?                @relation(fields: [accountId], references: [id])
+  user            User                    @relation(fields: [userId], references: [id], onDelete: Cascade)
+  transactions    InvestmentTransaction[]
+
+  @@index([userId])
+  @@index([userId, assetType])
+  @@index([ticker])
+}
+
+model InvestmentTransaction {
+  id              String                    @id @default(uuid()) @db.Uuid
+  type            InvestmentTransactionType
+  quantity        Decimal                   @db.Decimal(18, 8)
+  unitPrice       Decimal                   @db.Decimal(14, 2)
+  totalAmount     Decimal                   @db.Decimal(14, 2)
+  fees            Decimal                   @default(0) @db.Decimal(14, 2)
+  interestRate    Decimal?                  @db.Decimal(8, 4)
+  transactionDate DateTime                  @db.Timestamptz(6)
+  notes           String?
+  createdAt       DateTime                  @default(now()) @db.Timestamptz(6)
+  investmentId    String                    @db.Uuid
+  userId          String                    @db.Uuid
+  investment      Investment                @relation(fields: [investmentId], references: [id], onDelete: Cascade)
+  user            User                      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([investmentId])
+  @@index([userId])
+  @@index([investmentId, transactionDate])
+}
+
+model InvestmentGoal {
+  id                  String   @id @default(uuid()) @db.Uuid
+  name                String   @db.VarChar(120)
+  targetAmount        Decimal  @db.Decimal(14, 2)
+  targetDate          DateTime @db.Timestamptz(6)
+  monthlyContribution Decimal  @db.Decimal(14, 2)
+  expectedReturnRate  Decimal  @db.Decimal(8, 4)
+  currentAmount       Decimal  @default(0) @db.Decimal(14, 2)
+  assetTypes          String[] @db.VarChar(30)
+  createdAt           DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt           DateTime @updatedAt @db.Timestamptz(6)
+  userId              String   @db.Uuid
+  user                User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+}
+
+model PriceHistory {
+  id     String   @id @default(uuid()) @db.Uuid
+  ticker String   @db.VarChar(80)
+  price  Decimal  @db.Decimal(14, 2)
+  date   DateTime @db.Timestamptz(6)
+  source String   @db.VarChar(40)
+
+  @@unique([ticker, date])
+  @@index([ticker, date])
+}
+
+model MarketIndex {
+  id            String          @id @default(uuid()) @db.Uuid
+  indexName     MarketIndexName
+  value         Decimal         @db.Decimal(8, 4)
+  referenceDate DateTime        @db.Timestamptz(6)
+  period        IndexPeriod
+
+  @@unique([indexName, referenceDate, period])
+}
+
+enum AssetType {
+  RENDA_FIXA
+  ACAO
+  FII
+  ETF
+  CRIPTO
+  FUNDO
+  TESOURO_DIRETO
+  PREVIDENCIA
+  OUTRO
+}
+
+enum Indexer {
+  PRE
+  CDI
+  IPCA
+  SELIC
+  IGPM
+  NONE
+}
+
+enum InvestmentTransactionType {
+  APORTE
+  RESGATE
+  DIVIDENDO
+  JCP
+  RENDIMENTO
+  BONIFICACAO
+  DESDOBRAMENTO
+  GRUPAMENTO
+}
+
+enum MarketIndexName {
+  CDI
+  IBOV
+  IPCA
+  SELIC
+  IFIX
+}
+
+enum IndexPeriod {
+  DAILY
+  MONTHLY
+  YEARLY
+}
