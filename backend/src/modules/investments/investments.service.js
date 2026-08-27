@@ -1,4 +1,5 @@
 import { AppError } from '../../shared/utils/errors.js';
+import { logger } from '../../shared/utils/logger.js';
 import { calculateAveragePrice, calculateAverageInterestRate, calculateProfitability } from '../../utils/investmentCalculations.js';
 import { getQuoteForAsset } from '../../services/brapi.js';
 import {
@@ -123,7 +124,7 @@ export async function create(userId, data) {
       const refreshed = await repo.findById(created.id, userId);
       return enrichInvestment(refreshed);
     } catch (err) {
-      console.error('Falha ao sincronizar cotação do Tesouro:', err.message);
+      logger.warn({ err: err.message, investmentId: created.id }, 'Falha ao sincronizar cotação do Tesouro');
       return created;
     }
   }

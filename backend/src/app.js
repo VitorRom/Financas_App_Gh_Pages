@@ -24,7 +24,18 @@ const app = express();
 
 // Segurança e parsing
 app.use(helmet());
-app.use(cors());
+
+// CORS — em dev aceita qualquer origem (frontend em :5173). Em produção,
+// defina CORS_ORIGIN no .env com a URL do frontend (ex: https://app.exemplo.com).
+// Aceita lista separada por vírgula para múltiplas origens.
+const corsOptions = process.env.CORS_ORIGIN
+  ? {
+      origin: process.env.CORS_ORIGIN.split(',').map((s) => s.trim()).filter(Boolean),
+      credentials: true,
+    }
+  : { origin: true, credentials: true };
+app.use(cors(corsOptions));
+
 app.use(express.json());
 app.use(defaultLimiter);
 

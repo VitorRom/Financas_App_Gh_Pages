@@ -7,29 +7,47 @@ services:
       dockerfile: docker/Dockerfile
     ports:
       - '3001:3001'
-    env_file:
-      - ./backend/.env
+    environment:
+      # Dentro do compose, o host do Postgres é o nome do serviço `db`.
+      # O backend/.env.local (ou seu .env) precisa usar `db` em vez de `localhost`.
+      DATABASE_URL: postgresql://${POSTGRES_USER:-postgres}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-financas_db}
+      JWT_SECRET: ${JWT_SECRET:?Defina JWT_SECRET (>=32 chars) no .env.docker antes de subir a API}
+      NODE_ENV: ${NODE_ENV:-development}
+      CORS_ORIGIN: ${CORS_ORIGIN:-http://localhost:5173}
+      BRAPI_TOKEN: ${BRAPI_TOKEN:-}
     depends_on:
       db:
         condition: service_healthy
     restart: unless-stopped
+    networks:
+      - financas-net
 
   db:
     image: postgres:16-alpine
     restart: always
     environment:
-      POSTGRES_USER: ${POSTGRES_USER}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
-      POSTGRES_DB: ${POSTGRES_DB}
+      POSTGRES_USER: ${POSTGRES_USER:-postgres}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Defina POSTGRES_PASSWORD em .env.docker antes de subir o banco}
+      POSTGRES_DB: ${POSTGRES_DB:-financas_db}
     ports:
+      # Mapeado para 5432 apenas para permitir acesso direto via psql/CLI
+      # durante desenvolvimento. Em produção, remova este mapping.
       - '5432:5432'
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ['CMD-SHELL', 'pg_isready -U postgres']
+      test:
+        - CMD-SHELL
+        - pg_isready -U "$${POSTGRES_USER:-postgres}" -d "$${POSTGRES_DB:-financas_db}"
       interval: 5s
       timeout: 5s
-      retries: 5
+      retries: 10
+    networks:
+      - financas-net
 
 volumes:
   postgres_data:
+
+networks:
+  financas-net:
+    name: financas-net

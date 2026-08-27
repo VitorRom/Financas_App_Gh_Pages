@@ -10,13 +10,9 @@ export async function list(req, res, next) {
 
 export async function create(req, res, next) {
   try {
-    console.log('PLANNING CONTROLLER CREATE CALLED');
-    console.log('Request body:', req.body);
     const result = await service.create(req.user.id, req.body);
-    console.log('Create result:', result);
     res.status(201).json(result);
   } catch (error) {
-    console.log('Error in controller:', error);
     next(error);
   }
 }

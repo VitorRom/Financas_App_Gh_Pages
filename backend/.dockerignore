@@ -1,0 +1,34 @@
+# Dependências — instaladas dentro do container via npm ci
+node_modules
+npm-debug.log
+
+# Variáveis de ambiente reais
+.env
+.env.local
+.env.*.local
+
+# Bancos locais e artefatos Prisma
+prisma/*.db
+prisma/*.db-journal
+prisma/*.sqlite
+prisma/*.sqlite3
+prisma/migrations/dev.db*
+
+# Logs
+*.log
+server.log
+
+# Arquivos de teste, debug e inspeção locais
+smoke_tt.mjs
+_tmp_*.mjs
+_inspect*.mjs
+_*.mjs
+
+# Config local do Claude Code
+.claude
+
+# Sistema / editores
+.DS_Store
+Thumbs.db
+.vscode
+.idea

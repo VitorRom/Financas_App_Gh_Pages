@@ -6,6 +6,9 @@ const envSchema = z.object({
   JWT_EXPIRES_IN: z.string().default('7d'),
   PORT: z.coerce.number().default(3001),
   NODE_ENV: z.enum(['development', 'production', 'test']).default('development'),
+  // Lista separada por vírgula de origens permitidas pelo CORS. Vazio = aceita qualquer uma (dev).
+  CORS_ORIGIN: z.string().optional(),
+  BRAPI_TOKEN: z.string().optional(),
 });
 
 const parsed = envSchema.safeParse(process.env);
