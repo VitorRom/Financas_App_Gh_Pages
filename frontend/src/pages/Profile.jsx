@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { authAPI, setAuthToken } from '../services/api.js';
+import { authAPI, setAuthToken, STANDALONE } from '../services/api.js';
+import StandaloneBackup from '../components/StandaloneBackup.jsx';
 import { useAuth } from '../context/AuthContext.jsx';
 
 export default function Profile() {
@@ -107,6 +108,9 @@ export default function Profile() {
         </form>
       </div>
 
+      {STANDALONE && <StandaloneBackup />}
+
+      {!STANDALONE && (
       <div className="card max-w-xl">
         <h3 className="font-medium text-gray-900 dark:text-white mb-4">Alterar senha</h3>
         {passwordMsg && (
@@ -153,6 +157,7 @@ export default function Profile() {
           </p>
         </form>
       </div>
+      )}
 
       <div className="card max-w-xl">
         <h3 className="font-medium text-gray-900 dark:text-white mb-1">Apresentação</h3>

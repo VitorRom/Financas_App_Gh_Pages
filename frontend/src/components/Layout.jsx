@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { useState, useEffect, lazy, Suspense } from 'react';
 import { useAuth } from '../context/AuthContext.jsx';
+import { STANDALONE } from '../services/api.js';
 
 // Carregado sob demanda: só quem ainda não viu a apresentação baixa esse pedaço.
 const WelcomeTour = lazy(() => import('./onboarding/WelcomeTour.jsx'));
@@ -83,14 +84,16 @@ export default function Layout() {
             >
               <CreditCard size={20} />
             </Link>
-            <button
-              type="button"
-              onClick={handleLogout}
-              className="p-2 rounded-lg text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700"
-              title="Sair"
-            >
-              <LogOut size={20} />
-            </button>
+            {!STANDALONE && (
+              <button
+                type="button"
+                onClick={handleLogout}
+                className="p-2 rounded-lg text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-700"
+                title="Sair"
+              >
+                <LogOut size={20} />
+              </button>
+            )}
             <button
               type="button"
               onClick={toggleDarkMode}
@@ -110,10 +113,17 @@ export default function Layout() {
         </Suspense>
       )}
 
-      {/* Main content */}
-      <main className="max-w-7xl mx-auto px-4 py-6 pb-24">
-        <Outlet />
-      </main>
+      {/* Conteúdo principal.
+          O deslocamento da barra lateral fica neste invólucro, não no <main>: o
+          <main> usa `mx-auto`, e uma classe do Tailwind vence um seletor de
+          elemento na cascata — a regra `main { margin-left: 16rem }` que existia
+          aqui nunca chegava a valer, e a barra ficava por cima do conteúdo em
+          qualquer largura abaixo de 1920px. */}
+      <div className="md:pl-64">
+        <main className="max-w-7xl mx-auto px-4 py-6 pb-24">
+          <Outlet />
+        </main>
+      </div>
 
       {/* Bottom Navigation - Mobile */}
       <nav className="fixed bottom-0 left-0 right-0 bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 md:hidden">
@@ -161,14 +171,6 @@ export default function Layout() {
         </div>
       </nav>
 
-      {/* Desktop content offset */}
-      <style>{`
-        @media (min-width: 768px) {
-          main {
-            margin-left: 16rem;
-          }
-        }
-      `}</style>
     </div>
   );
 }

@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState } from 'react';
-import { authAPI, getAuthToken, setAuthToken } from '../services/api.js';
+import { authAPI, getAuthToken, setAuthToken, STANDALONE } from '../services/api.js';
 
 const AuthContext = createContext(null);
 
@@ -47,6 +47,17 @@ export function AuthProvider({ children }) {
     let cancelled = false;
 
     async function bootstrap() {
+      // Modo autônomo não tem contas nem sessão: existe um único usuário local.
+      if (STANDALONE) {
+        try {
+          const me = await authAPI.me();
+          if (!cancelled) setUser(normalizeUser(me));
+        } finally {
+          if (!cancelled) setLoading(false);
+        }
+        return;
+      }
+
       if (!getAuthToken()) {
         if (!cancelled) setLoading(false);
         return;
@@ -91,6 +102,7 @@ export function AuthProvider({ children }) {
   }, []);
 
   const logout = useCallback(() => {
+    if (STANDALONE) return; // não há de onde sair
     setAuthToken(null);
     setUser(null);
   }, []);

@@ -127,51 +127,74 @@ npm run dev                # http://localhost:5173
 
 ## Publicar
 
-A aplicação tem duas metades e elas **não** vão para o mesmo lugar:
+Há dois jeitos de publicar, e eles resolvem problemas diferentes.
 
-| Parte | O que é | Onde hospedar |
+### Modo autônomo — hospedagem estática, sem servidor
+
+**É o padrão do workflow.** A aplicação roda inteira no navegador de quem acessa:
+sem API, sem banco, sem login. Os dados ficam no `localStorage` do próprio navegador.
+Serve para colocar no ar em GitHub Pages sem infraestrutura nenhuma.
+
+O que muda em relação ao modo completo:
+
+| | Modo autônomo | Com API |
 |---|---|---|
-| `frontend/` | React já compilado — arquivos estáticos | GitHub Pages, Netlify, Vercel |
-| `backend/` + Postgres | Processo Node que precisa ficar no ar e um banco | Render, Railway, Fly.io, VPS |
+| Login | não existe, entra direto | e-mail e senha |
+| Dados | no navegador de cada pessoa | no Postgres, compartilhados entre aparelhos |
+| Importar extrato | indisponível (o parser é do servidor) | PDF e Excel |
+| Cotações de mercado | indisponíveis; preço informado à mão | BrAPI e Tesouro Transparente |
+| Backup | arquivo JSON no Perfil | banco de dados |
 
-**O GitHub Pages sozinho não serve.** Ele só entrega arquivo estático: não roda Node
-nem PostgreSQL. Sem uma API publicada, o site abre a tela de login e nenhuma
-requisição funciona.
+> **Limitação que importa:** limpar os dados do site apaga tudo, e nada sincroniza
+> entre celular e notebook. Por isso o Perfil tem **Baixar backup** e **Restaurar
+> backup** — oriente quem for usar a baixar o arquivo de vez em quando.
 
-### 1. Publicar a API
+Para publicar assim, basta **Settings → Pages → Source: GitHub Actions**. O push na
+`main` já faz o resto.
 
-Suba `backend/` em qualquer serviço que rode Node com um Postgres ao lado. O que
-precisa estar definido lá:
+A implementação vive em `frontend/src/services/standalone/` e é ativada por
+`VITE_STANDALONE=true` no build. `services/api.js` desvia todas as chamadas para lá,
+mantendo o mesmo contrato — nenhuma tela precisou ser alterada.
+
+Para rodar o modo autônomo localmente:
+
+```bash
+cd frontend
+VITE_STANDALONE=true npm run dev
+```
+
+### Modo completo — com API e banco
+
+Precisa hospedar as duas metades:
+
+| Parte | Onde |
+|---|---|
+| `frontend/` | GitHub Pages, Netlify, Vercel |
+| `backend/` + Postgres | Render, Railway, Fly.io, VPS |
+
+1. Suba `backend/` em um serviço com Node e Postgres, definindo:
 
 ```env
-DATABASE_URL=postgresql://...        # o Postgres do provedor
-JWT_SECRET=...                       # mínimo 32 caracteres
+DATABASE_URL=postgresql://...
+JWT_SECRET=...                            # mínimo 32 caracteres
 NODE_ENV=production
 CORS_ORIGIN=https://<usuario>.github.io   # sem isso o navegador bloqueia o frontend
 ```
 
-Depois de subir, rode uma vez: `npm run db:push` e `npm run db:seed`.
+Depois rode uma vez `npm run db:push` e `npm run db:seed`.
 
-### 2. Publicar o frontend no GitHub Pages
-
-O workflow `.github/workflows/deploy-pages.yml` compila e publica a cada push na
-`main`. Antes do primeiro deploy:
-
-1. **Settings → Pages → Source:** selecione `GitHub Actions`.
-2. **Settings → Secrets and variables → Actions → Variables:** crie
-   `VITE_API_URL` com a URL pública da API (ex.: `https://financas-api.onrender.com`).
-
-O site fica em `https://<usuario>.github.io/<repositorio>/`. O workflow avisa no log
-quando `VITE_API_URL` está vazia — nesse caso o site sobe, mas sem dados.
+2. Em **Settings → Secrets and variables → Actions → Variables**, crie
+   `VITE_API_URL` com a URL pública da API. O workflow detecta e desliga o modo
+   autônomo sozinho.
 
 ### Detalhes que o Pages exige
 
-- **Subcaminho:** o site não fica na raiz do domínio, então o build usa
-  `VITE_BASE=/<repositorio>/` e o React Router recebe esse valor como `basename`.
-- **Rotas diretas:** o Pages não tem fallback de SPA. O build copia `index.html`
-  para `404.html`, e assim abrir `/transactions` direto funciona.
-- **Conta pública:** qualquer pessoa com o link consegue se cadastrar. Para uso
-  restrito, hospede em um lugar com controle de acesso ou desative o registro.
+- **Subcaminho:** o site fica em `https://<usuario>.github.io/<repositorio>/`, então o
+  build usa `VITE_BASE` e o React Router recebe esse valor como `basename`.
+- **Rotas diretas:** o Pages não tem fallback de SPA. O build copia `index.html` para
+  `404.html`, e abrir `/transactions` direto funciona.
+- **Acesso:** qualquer pessoa com o link abre a aplicação. No modo autônomo isso é
+  inofensivo — cada navegador tem os próprios dados, e nada é enviado a lugar nenhum.
 
 ---
 

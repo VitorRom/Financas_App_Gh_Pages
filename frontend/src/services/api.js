@@ -1,7 +1,15 @@
+import { handleStandaloneRequest } from './standalone/backend.js';
+
+/**
+ * Modo autônomo: a aplicação roda inteira no navegador, sem API e sem login, com os
+ * dados guardados localmente. É o que permite publicar em hospedagem estática como o
+ * GitHub Pages. Ligado por VITE_STANDALONE no build.
+ */
+export const STANDALONE = import.meta.env.VITE_STANDALONE === 'true';
+
 /**
  * Em desenvolvimento fica vazio e o proxy do Vite encaminha /api para localhost:3001.
- * Publicado (GitHub Pages, por exemplo) o frontend e a API ficam em domínios
- * diferentes, então VITE_API_URL precisa apontar para a URL pública da API.
+ * Publicado com API própria, VITE_API_URL aponta para a URL pública dela.
  */
 const API_BASE = `${(import.meta.env.VITE_API_URL || '').replace(/\/$/, '')}/api`;
 
@@ -51,6 +59,8 @@ async function errorMessageFrom(response, endpoint, method = 'GET') {
 }
 
 async function fetchAPI(endpoint, options = {}) {
+  if (STANDALONE) return handleStandaloneRequest(endpoint, options);
+
   const headers = buildHeaders({
     'Content-Type': 'application/json',
     ...options.headers,
@@ -78,6 +88,8 @@ async function fetchAPI(endpoint, options = {}) {
 }
 
 async function postFormData(endpoint, formData) {
+  if (STANDALONE) return handleStandaloneRequest(endpoint, { method: 'POST' });
+
   const headers = buildHeaders();
 
   const response = await fetch(`${API_BASE}${endpoint}`, {

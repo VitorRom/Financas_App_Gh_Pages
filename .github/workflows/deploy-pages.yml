@@ -41,21 +41,25 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      - name: Testes do modo autônomo
+        run: npm test
+
       - name: Build
         env:
           # O site fica em https://<usuario>.github.io/<repositorio>/
           VITE_BASE: /${{ github.event.repository.name }}/
-          # Defina em Settings → Secrets and variables → Actions → Variables.
-          # Sem isso o frontend sobe sem API e nenhuma tela carrega dados.
+          # Sem VITE_API_URL definida, sobe em modo autônomo (dados no navegador).
+          VITE_STANDALONE: ${{ vars.VITE_API_URL == '' && 'true' || 'false' }}
           VITE_API_URL: ${{ vars.VITE_API_URL }}
         run: npm run build
 
-      - name: Avisar se a API não foi configurada
-        if: vars.VITE_API_URL == ''
+      - name: Modo da publicação
         run: |
-          echo "::warning title=API não configurada::A variável VITE_API_URL está vazia."
-          echo "O site vai subir, mas login e dados não vão funcionar sem uma API publicada."
-          echo "Defina em Settings → Secrets and variables → Actions → Variables."
+          if [ -z "${{ vars.VITE_API_URL }}" ]; then
+            echo "::notice title=Modo autonomo::Publicado sem API: os dados ficam no navegador de cada pessoa."
+          else
+            echo "::notice title=Com API::Publicado apontando para ${{ vars.VITE_API_URL }}."
+          fi
 
       - uses: actions/upload-pages-artifact@v3
         with:
