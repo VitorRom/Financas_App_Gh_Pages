@@ -64,7 +64,7 @@ export default function AllocationPieChart({ data, title = 'Alocação por Tipo'
             }}
           />
           <Legend
-            formatter={(value, entry) => {
+            formatter={(value) => {
               const item = chartData.find((d) => d.name === value);
               return `${value} (${item?.pct}%)`;
             }}

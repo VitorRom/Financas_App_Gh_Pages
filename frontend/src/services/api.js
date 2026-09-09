@@ -1,4 +1,9 @@
-const API_BASE = '/api';
+/**
+ * Em desenvolvimento fica vazio e o proxy do Vite encaminha /api para localhost:3001.
+ * Publicado (GitHub Pages, por exemplo) o frontend e a API ficam em domínios
+ * diferentes, então VITE_API_URL precisa apontar para a URL pública da API.
+ */
+const API_BASE = `${(import.meta.env.VITE_API_URL || '').replace(/\/$/, '')}/api`;
 
 export const AUTH_TOKEN_KEY = 'financas_auth_token';
 
@@ -26,6 +31,25 @@ function isAuthPublicEndpoint(endpoint) {
   );
 }
 
+/**
+ * Mensagem de erro a partir da resposta.
+ *
+ * Quando o corpo não é JSON, a API não chegou a responder: normalmente é rota
+ * inexistente ou servidor fora do ar. Antes isso virava um "Erro na requisição"
+ * sem pista nenhuma — a mensagem agora diz o que aconteceu.
+ */
+async function errorMessageFrom(response, endpoint, method = 'GET') {
+  const body = await response.json().catch(() => null);
+  if (body?.error) return body.error;
+
+  if (response.status === 404) {
+    return `Recurso não encontrado no servidor (${method} ${endpoint}). ` +
+      'Se a aplicação foi atualizada, reinicie o servidor da API.';
+  }
+  if (response.status >= 500) return 'O servidor falhou ao processar. Tente de novo em instantes.';
+  return `Falha na comunicação com o servidor (HTTP ${response.status}).`;
+}
+
 async function fetchAPI(endpoint, options = {}) {
   const headers = buildHeaders({
     'Content-Type': 'application/json',
@@ -46,8 +70,7 @@ async function fetchAPI(endpoint, options = {}) {
       setAuthToken(null);
       window.dispatchEvent(new CustomEvent('auth:session-expired'));
     }
-    const error = await response.json().catch(() => ({ error: 'Erro na requisição' }));
-    throw new Error(error.error || 'Request failed');
+    throw new Error(await errorMessageFrom(response, endpoint, options.method));
   }
 
   if (response.status === 204) return null;
@@ -68,8 +91,7 @@ async function postFormData(endpoint, formData) {
       setAuthToken(null);
       window.dispatchEvent(new CustomEvent('auth:session-expired'));
     }
-    const error = await response.json().catch(() => ({ error: 'Erro no envio' }));
-    throw new Error(error.error || 'Request failed');
+    throw new Error(await errorMessageFrom(response, endpoint, 'POST'));
   }
 
   return response.json();
@@ -86,6 +108,7 @@ export const authAPI = {
     fetchAPI('/auth/profile', { method: 'PUT', body: JSON.stringify(body) }),
   changePassword: (body) =>
     fetchAPI('/auth/password', { method: 'PUT', body: JSON.stringify(body) }),
+  completeOnboarding: () => fetchAPI('/auth/onboarding/complete', { method: 'POST' }),
 };
 
 // Assinaturas
@@ -219,9 +242,15 @@ export const investmentGoalsAPI = {
 
 // Cotações e Índices
 export const marketAPI = {
-  getQuote: (ticker) => fetchAPI(`/market/quote/${ticker}`),
+  // `assetType` é o que permite a API buscar título do Tesouro no Tesouro
+  // Transparente em vez da BrAPI, que não conhece esses papéis.
+  getQuote: (ticker, assetType) =>
+    fetchAPI(`/market/quote/${ticker}${assetType ? `?assetType=${assetType}` : ''}`),
   refreshAll: () => fetchAPI('/market/refresh-all', { method: 'POST' }),
   getIndices: () => fetchAPI('/market/indices'),
+  // Catálogo do Tesouro Direto para o usuário escolher o título exato: indexador +
+  // vencimento não bastam, porque oito vencimentos têm versão com e sem juros semestrais.
+  getTreasuryTitles: () => fetchAPI('/market/treasury'),
   getIndexHistory: (params = {}) => {
     const query = new URLSearchParams(params).toString();
     return fetchAPI(`/market/index-history${query ? `?${query}` : ''}`);

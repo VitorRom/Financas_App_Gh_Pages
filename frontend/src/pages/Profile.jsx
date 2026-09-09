@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
-import { authAPI } from '../services/api.js';
+import { authAPI, setAuthToken } from '../services/api.js';
 import { useAuth } from '../context/AuthContext.jsx';
 
 export default function Profile() {
-  const { user, updateLocalUser } = useAuth();
+  const { user, updateLocalUser, replayOnboarding } = useAuth();
   const [name, setName] = useState(user?.name || '');
   const [email, setEmail] = useState(user?.email || '');
   const [profileMsg, setProfileMsg] = useState('');
@@ -46,8 +46,11 @@ export default function Profile() {
     setPasswordErr('');
     setSavingPassword(true);
     try {
-      await authAPI.changePassword({ currentPassword, newPassword });
-      setPasswordMsg('Senha alterada com sucesso.');
+      const { token } = await authAPI.changePassword({ currentPassword, newPassword });
+      // Trocar a senha invalida os tokens anteriores, inclusive o desta aba.
+      // O backend devolve um novo para a sessão atual continuar válida.
+      if (token) setAuthToken(token);
+      setPasswordMsg('Senha alterada. As outras sessões foram desconectadas.');
       setCurrentPassword('');
       setNewPassword('');
     } catch (err) {
@@ -139,13 +142,26 @@ export default function Profile() {
               value={newPassword}
               onChange={(e) => setNewPassword(e.target.value)}
               required
-              minLength={6}
+              minLength={8}
             />
           </div>
           <button type="submit" className="btn btn-secondary" disabled={savingPassword}>
             {savingPassword ? 'Alterando…' : 'Alterar senha'}
           </button>
+          <p className="text-xs text-gray-500 dark:text-gray-400">
+            Trocar a senha desconecta as outras sessões. Mínimo de 8 caracteres.
+          </p>
         </form>
+      </div>
+
+      <div className="card max-w-xl">
+        <h3 className="font-medium text-gray-900 dark:text-white mb-1">Apresentação</h3>
+        <p className="text-sm text-gray-600 dark:text-gray-400 mb-4">
+          Rever o passo a passo do que dá para fazer em cada aba.
+        </p>
+        <button type="button" className="btn btn-secondary" onClick={replayOnboarding}>
+          Ver apresentação de novo
+        </button>
       </div>
     </div>
   );

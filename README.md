@@ -16,12 +16,13 @@ Stack: Node.js + Express + Prisma + PostgreSQL no backend, React + Vite no front
 | **Categorias** | Pré-definidas + personalizadas com cores e ícones |
 | **Contas** | Múltiplas contas (corrente, poupança, cartão, dinheiro) com saldo |
 | **Metas** | Aportes mensais com juros compostos e acompanhamento de parcelas |
-| **Planejamento** | Receitas e despesas fixas com projeção de saldo futuro |
+| **Planejamento** | Receitas e despesas fixas com mês de início absoluto e projeção de saldo futuro |
 | **Investimentos** | Carteira com cotações via BrAPI, dividendos, alocação e Tesouro Direto |
 | **Metas de investimento** | Projeção de patrimônio com aporte mensal e taxa esperada |
 | **Importação** | Upload de extratos PDF/Excel com detecção automática de banco |
 | **Regras automáticas** | Categoria automática por descrição do lançamento |
 | **Assinaturas** | Planos Free / Pro / Premium com limites de transações e contas |
+| **Primeiro uso** | Apresentação em 7 passos no primeiro acesso + lista de primeiros passos no Dashboard |
 | **Tema** | Modo claro e escuro |
 | **Responsivo** | Interface adaptada para mobile e desktop |
 
@@ -109,12 +110,68 @@ npm run db:seed
 npm run dev                # http://localhost:3001
 ```
 
+> **Use `npm run dev`, não `npm start`.** Só o `dev` roda com `node --watch`, que
+> recarrega a API a cada alteração. Com `npm start` o servidor continua servindo o
+> código que estava em memória quando subiu — e o sintoma no frontend é confuso:
+> rota nova responde 404, campo novo some da resposta. O servidor avisa no boot
+> quando está sem hot reload.
+
 ```bash
 # Frontend (em outro terminal)
 cd frontend
 npm install
 npm run dev                # http://localhost:5173
 ```
+
+---
+
+## Publicar
+
+A aplicação tem duas metades e elas **não** vão para o mesmo lugar:
+
+| Parte | O que é | Onde hospedar |
+|---|---|---|
+| `frontend/` | React já compilado — arquivos estáticos | GitHub Pages, Netlify, Vercel |
+| `backend/` + Postgres | Processo Node que precisa ficar no ar e um banco | Render, Railway, Fly.io, VPS |
+
+**O GitHub Pages sozinho não serve.** Ele só entrega arquivo estático: não roda Node
+nem PostgreSQL. Sem uma API publicada, o site abre a tela de login e nenhuma
+requisição funciona.
+
+### 1. Publicar a API
+
+Suba `backend/` em qualquer serviço que rode Node com um Postgres ao lado. O que
+precisa estar definido lá:
+
+```env
+DATABASE_URL=postgresql://...        # o Postgres do provedor
+JWT_SECRET=...                       # mínimo 32 caracteres
+NODE_ENV=production
+CORS_ORIGIN=https://<usuario>.github.io   # sem isso o navegador bloqueia o frontend
+```
+
+Depois de subir, rode uma vez: `npm run db:push` e `npm run db:seed`.
+
+### 2. Publicar o frontend no GitHub Pages
+
+O workflow `.github/workflows/deploy-pages.yml` compila e publica a cada push na
+`main`. Antes do primeiro deploy:
+
+1. **Settings → Pages → Source:** selecione `GitHub Actions`.
+2. **Settings → Secrets and variables → Actions → Variables:** crie
+   `VITE_API_URL` com a URL pública da API (ex.: `https://financas-api.onrender.com`).
+
+O site fica em `https://<usuario>.github.io/<repositorio>/`. O workflow avisa no log
+quando `VITE_API_URL` está vazia — nesse caso o site sobe, mas sem dados.
+
+### Detalhes que o Pages exige
+
+- **Subcaminho:** o site não fica na raiz do domínio, então o build usa
+  `VITE_BASE=/<repositorio>/` e o React Router recebe esse valor como `basename`.
+- **Rotas diretas:** o Pages não tem fallback de SPA. O build copia `index.html`
+  para `404.html`, e assim abrir `/transactions` direto funciona.
+- **Conta pública:** qualquer pessoa com o link consegue se cadastrar. Para uso
+  restrito, hospede em um lugar com controle de acesso ou desative o registro.
 
 ---
 
@@ -131,6 +188,13 @@ npm run dev                # http://localhost:5173
 | `NODE_ENV` | `development` / `production` / `test` | `development` |
 | `CORS_ORIGIN` | Origens permitidas (CSV) | vazio = qualquer (dev) |
 | `BRAPI_TOKEN` | Token para cotações (https://brapi.dev) | vazio = sem cotações |
+| `ENFORCE_PLAN_LIMITS` | Aplica os limites de transações/contas do plano | `false` |
+
+> **Limites de plano.** Ficam desligados por padrão: o plano gratuito permite 100
+> transações e 2 contas, o que travaria o uso pessoal na primeira importação de
+> extrato. A checagem existe e está aplicada na criação de contas e transações —
+> defina `ENFORCE_PLAN_LIMITS=true` para ligá-la. Note que `POST /subscriptions/subscribe`
+> ainda não cobra nada: a troca de plano é livre até existir integração de pagamento.
 
 ### `.env.docker` (raiz)
 
@@ -178,13 +242,42 @@ backend/src/
 ```
 frontend/src/
 ├── pages/                   # Telas (Login, Dashboard, Transactions, ...)
-├── components/              # Componentes reutilizáveis
+├── components/
+│   ├── ui/StateMessage.jsx  # Estados de carregando / erro / vazio
+│   ├── onboarding/          # Apresentação de primeiro uso + primeiros passos
 │   └── investments/         # Componentes específicos de investimentos
-├── context/                 # AuthContext (estado global de autenticação)
+├── context/
+│   ├── AuthContext.jsx      # Sessão do usuário
+│   ├── ToastContext.jsx     # Avisos (useToast)
+│   └── ConfirmContext.jsx   # Diálogo de confirmação (useConfirm)
 ├── services/
 │   └── api.js               # Cliente HTTP único (fetch wrapper)
-└── App.jsx                  # Roteamento SPA
+└── App.jsx                  # Roteamento SPA com code splitting por rota
 ```
+
+Login e Dashboard entram no bundle inicial; as demais telas são carregadas sob
+demanda com `React.lazy`, o que mantém o Recharts fora do primeiro carregamento.
+
+Nenhuma tela usa `alert()` ou `confirm()`: mensagens passam por `useToast()` e
+confirmações por `useConfirm()`. Toda chamada de API que falha renderiza um
+`ErrorState` com botão de tentar de novo — nunca uma tela em branco.
+
+### Primeiro uso
+
+Duas peças independentes:
+
+- **`WelcomeTour`** — apresentação em 7 passos, exibida uma vez por conta. Cada passo
+  desenha a própria ilustração: nenhum aponta para elemento da página nem troca de
+  rota, então a navegação entre passos é instantânea e não depende de nada estar
+  montado. Fecha com Esc, navega com ← →, e o foco fica preso no diálogo. É carregada
+  sob demanda (`React.lazy`), então quem já viu não baixa o código.
+- **`FirstStepsCard`** — lista de três passos no topo do Dashboard, com o estado de
+  cada um vindo dos dados reais (tem conta? tem transação? tem meta?). Some sozinha
+  quando os três estiverem feitos, e pode ser ocultada antes disso.
+
+A conclusão é persistida em `User.onboardingCompletedAt` via
+`POST /api/auth/onboarding/complete` — idempotente, preserva a data original. O botão
+"Ver apresentação de novo" no Perfil reabre a apresentação sem apagar essa data.
 
 Todas as chamadas HTTP passam por `services/api.js`, que:
 - Injeta `Authorization: Bearer <token>` automaticamente
@@ -208,6 +301,45 @@ Schema PostgreSQL com tipos nativos para precisão monetária:
 
 Models principais: `User`, `Subscription`, `Plan`, `Account`, `Category`, `Transaction`, `ImportBatch`, `MerchantRule`, `Goal`, `GoalInstallment`, `PlanningItem`, `Investment`, `InvestmentTransaction`, `InvestmentGoal`, `PriceHistory`, `MarketIndex`.
 
+### Meses no Planejamento
+
+`PlanningItem.startDate` guarda o **mês de início absoluto** (primeiro dia do mês, em
+UTC). A janela de atividade de um item é `[startDate, startDate + monthsDuration)`,
+comparada em índices absolutos de mês (`ano × 12 + mês`).
+
+Isso substituiu `startMonth`, que era um deslocamento em meses contado a partir da
+data corrente: como "hoje" muda, um item marcado para novembro virava dezembro na
+virada do mês, e um parcelamento de 9 vezes nunca terminava. A coluna antiga segue
+no banco, sem ninguém ler, até o backfill ser conferido — pode ser removida depois.
+
+Para converter itens criados antes da mudança:
+
+```bash
+node -r dotenv/config prisma/backfill-planning-start-date.js --dry-run   # confere
+node -r dotenv/config prisma/backfill-planning-start-date.js            # aplica
+```
+
+Ele reconstrói o mês pretendido a partir de `createdAt + startMonth`.
+
+### Saldo das contas
+
+`Account` guarda dois valores: `initialBalance` (saldo de abertura, informado na
+criação) e `balance` (saldo corrente). A identidade é:
+
+```
+balance = initialBalance + Σ receitas − Σ despesas
+```
+
+Guardar a abertura separada é o que permite recalcular saldos depois de apagar
+transações sem perder o valor que o usuário informou. Contas de investimento são a
+exceção: o saldo vem das posições dos ativos, e `balance` fica sempre em 0.
+
+Se você já tinha contas antes desse campo existir, rode uma vez após o `db:push`:
+
+```bash
+node -r dotenv/config prisma/backfill-initial-balance.js
+```
+
 ---
 
 ## API Endpoints
@@ -217,7 +349,7 @@ Todas as rotas marcadas como **protegidas** exigem `Authorization: Bearer <token
 | Recurso | Endpoints |
 |---|---|
 | **Health** | `GET /api/health` |
-| **Auth** | `POST /auth/register` · `POST /auth/login` · `GET /auth/me` · `PUT /auth/profile` · `PUT /auth/password` |
+| **Auth** | `POST /auth/register` · `POST /auth/login` · `GET /auth/me` · `PUT /auth/profile` · `PUT /auth/password` · `POST /auth/onboarding/complete` |
 | **Subscriptions** | `GET /subscriptions/plans` · `GET /subscriptions` · `POST /subscriptions/subscribe` · `POST /subscriptions/cancel` |
 | **Transactions** | `GET /transactions` · `GET /transactions/:id` · `POST` · `PUT /:id` · `DELETE /:id` |
 | **Categories** | `GET /categories` · `POST` · `PUT /:id` · `DELETE /:id` |
@@ -237,7 +369,12 @@ Todas as rotas marcadas como **protegidas** exigem `Authorization: Bearer <token
 
 ## Segurança
 
-- **Senhas** armazenadas com `bcryptjs` (hash + salt)
+- **Senhas** armazenadas com `bcryptjs` (hash + salt), mínimo de 8 caracteres
+- **Invalidação de sessão** — `User.tokenVersion` viaja dentro do JWT; trocar a senha
+  incrementa o valor e derruba todos os tokens emitidos antes (a sessão que trocou
+  recebe um token novo na resposta)
+- **Isolamento entre usuários** — todo recurso é buscado por `id + userId` antes de
+  ser lido ou escrito, inclusive as contas e categorias referenciadas por uma transação
 - **JWT** com `JWT_SECRET` obrigatório (mínimo 32 caracteres, validado por Zod na inicialização)
 - **Rate limiting** em todas as rotas, com limite agressivo em login/registro
 - **Helmet** para headers HTTP seguros
@@ -252,18 +389,33 @@ Todas as rotas marcadas como **protegidas** exigem `Authorization: Bearer <token
 
 ### Backend
 ```bash
-npm run dev          # Servidor com hot reload (node --watch)
-npm run start        # Produção
-npm run db:push      # Aplicar schema (cria/migra tabelas)
-npm run db:generate  # Regenerar Prisma Client
-npm run db:seed      # Popular planos de assinatura
+npm run dev               # Servidor com hot reload (node --watch)
+npm run start             # Produção
+npm test                  # Testes unitários (não precisam de banco)
+npm run test:integration  # Testes de integração (precisam de DATABASE_URL válido)
+npm run db:push           # Aplicar schema (cria/migra tabelas)
+npm run db:generate       # Regenerar Prisma Client
+npm run db:seed           # Popular planos de assinatura
 ```
 
 ### Frontend
 ```bash
 npm run dev      # Servidor de desenvolvimento (Vite)
 npm run build    # Build de produção (dist/)
+npm run lint     # ESLint (falha com qualquer aviso)
 npm run preview  # Preview do build
 ```
+
+## Testes
+
+```
+backend/tests/
+├── unit.test.mjs         # Funções puras: preço médio, rentabilidade, parsers de extrato
+├── regression.test.mjs   # Trava bugs já corrigidos (datas de parcelas, menos tipográfico)
+└── integration.test.mjs  # Contra Postgres real: isolamento entre usuários, saldos, exclusões
+```
+
+Os testes de integração criam usuários próprios com e-mail aleatório e apagam tudo
+no final — não tocam em dados existentes.
 
 ---

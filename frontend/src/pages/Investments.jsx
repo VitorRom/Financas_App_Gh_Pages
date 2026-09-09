@@ -15,6 +15,10 @@ import IndexComparisonChart from '../components/investments/IndexComparisonChart
 import InvestmentFormModal from '../components/investments/InvestmentFormModal.jsx';
 import TransactionFormModal from '../components/investments/TransactionFormModal.jsx';
 import GoalFormModal from '../components/investments/GoalFormModal.jsx';
+import TreasuryResultBreakdown from '../components/investments/TreasuryResultBreakdown.jsx';
+import { useToast } from '../context/ToastContext.jsx';
+import { useConfirm } from '../context/ConfirmContext.jsx';
+import { ErrorState, LoadingState } from '../components/ui/StateMessage.jsx';
 
 function formatCurrency(value) {
   return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value);
@@ -47,6 +51,12 @@ const TX_TYPE_LABELS = {
 };
 
 export default function Investments() {
+  const toast = useToast();
+  const confirm = useConfirm();
+  // Um erro por aba: antes todas as chamadas caíam em `.catch(() => {})` e a aba
+  // ficava permanentemente em branco, sem nenhuma pista do que aconteceu.
+  const [tabError, setTabError] = useState(null);
+  const [loadError, setLoadError] = useState(null);
   const [activeTab, setActiveTab] = useState('carteira');
   const [investments, setInvestments] = useState([]);
   const [summary, setSummary] = useState(null);
@@ -71,37 +81,32 @@ export default function Investments() {
   const [detailTransactions, setDetailTransactions] = useState([]);
 
   const loadInvestments = useCallback(async ({ autoRefreshTreasury = false } = {}) => {
-    try {
-      const data = await investmentsAPI.getAll();
-      setInvestments(data);
+    const data = await investmentsAPI.getAll();
+    setInvestments(data);
 
-      const needsTreasuryRefresh = autoRefreshTreasury && data.some(
-        (inv) => inv.assetType === 'TESOURO_DIRETO' && !inv.currentPrice
-      );
-      if (needsTreasuryRefresh) {
-        await marketAPI.refreshAll();
-        const refreshed = await investmentsAPI.getAll();
-        setInvestments(refreshed);
-      }
-    } catch (err) {
-      console.error('Erro ao carregar investimentos:', err);
+    // Tesouro Direto costuma chegar sem cotação na primeira carga; busca uma vez.
+    const needsTreasuryRefresh =
+      autoRefreshTreasury && data.some((inv) => inv.assetType === 'TESOURO_DIRETO' && !inv.currentPrice);
+
+    if (needsTreasuryRefresh) {
+      await marketAPI.refreshAll();
+      setInvestments(await investmentsAPI.getAll());
     }
   }, []);
 
   const loadSummary = useCallback(async () => {
-    try {
-      const data = await investmentsAPI.getSummary();
-      setSummary(data);
-    } catch (err) {
-      console.error('Erro ao carregar resumo:', err);
-    }
+    const data = await investmentsAPI.getSummary();
+    setSummary(data);
   }, []);
 
   const loadAll = useCallback(async () => {
     setLoading(true);
+    setLoadError(null);
     try {
       await loadInvestments({ autoRefreshTreasury: true });
       await loadSummary();
+    } catch (err) {
+      setLoadError(err.message);
     } finally {
       setLoading(false);
     }
@@ -109,32 +114,73 @@ export default function Investments() {
 
   useEffect(() => { loadAll(); }, [loadAll]);
 
-  // Carregar dados da aba quando mudar
-  useEffect(() => {
+  // Busca os dados da aba ativa sem tocar em estado — quem aplica é o efeito,
+  // que descarta respostas atrasadas de uma aba que o usuário já deixou.
+  const fetchTab = useCallback(async () => {
     if (activeTab === 'dashboard') {
-      investmentsAPI.getAllocation().then(setAllocation).catch(() => {});
-      investmentsAPI.getEvolution(12).then(setEvolution).catch(() => {});
-    } else if (activeTab === 'proventos') {
-      investmentsAPI.getDividends(dividendYear).then(setDividends).catch(() => {});
-    } else if (activeTab === 'metas') {
-      investmentGoalsAPI.getAll().then(setGoals).catch(() => {});
+      const [allocation, evolution] = await Promise.all([
+        investmentsAPI.getAllocation(),
+        investmentsAPI.getEvolution(12),
+      ]);
+      return { allocation, evolution };
     }
+    if (activeTab === 'proventos') {
+      return { dividends: await investmentsAPI.getDividends(dividendYear) };
+    }
+    if (activeTab === 'metas') {
+      return { goals: await investmentGoalsAPI.getAll() };
+    }
+    return {};
   }, [activeTab, dividendYear]);
+
+  const [tabReloadKey, setTabReloadKey] = useState(0);
+
+  useEffect(() => {
+    let cancelled = false;
+    setTabError(null);
+
+    fetchTab()
+      .then((data) => {
+        if (cancelled) return;
+        if (data.allocation !== undefined) setAllocation(data.allocation);
+        if (data.evolution !== undefined) setEvolution(data.evolution);
+        if (data.dividends !== undefined) setDividends(data.dividends);
+        if (data.goals !== undefined) setGoals(data.goals);
+      })
+      .catch((err) => {
+        if (!cancelled) setTabError(err.message);
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [fetchTab, tabReloadKey]);
 
   // Detail view
   useEffect(() => {
-    if (selectedInvestment) {
-      investmentsAPI.getTransactions(selectedInvestment.id).then(setDetailTransactions).catch(() => {});
-    }
-  }, [selectedInvestment]);
+    if (!selectedInvestment) return;
+    investmentsAPI
+      .getTransactions(selectedInvestment.id)
+      .then(setDetailTransactions)
+      .catch((err) => toast.error(err.message, { title: 'Não foi possível carregar as transações' }));
+  }, [selectedInvestment, toast]);
 
   async function handleRefreshAll() {
     setRefreshing(true);
     try {
-      await marketAPI.refreshAll();
+      const result = await marketAPI.refreshAll();
       await loadAll();
+      const updated = result?.updated ?? 0;
+      const total = result?.total ?? 0;
+      if (total === 0) {
+        toast.info('Nenhum ativo com cotação para atualizar.');
+      } else if (updated === total) {
+        toast.success(`${updated} de ${total} cotações atualizadas.`);
+      } else {
+        toast.warning(`${updated} de ${total} cotações atualizadas. As demais não têm cotação disponível.`);
+      }
     } catch (err) {
-      alert('Erro ao atualizar cotações: ' + err.message);
+      toast.error(err.message, { title: 'Não foi possível atualizar as cotações' });
     } finally {
       setRefreshing(false);
     }
@@ -142,10 +188,13 @@ export default function Investments() {
 
   async function handleRefreshPrice(investmentId) {
     try {
-      await investmentsAPI.refreshPrice(investmentId);
+      const result = await investmentsAPI.refreshPrice(investmentId);
       await loadInvestments();
+      if (result?.priceUpdate?.success === false) {
+        toast.warning(result.priceUpdate.error || 'Sem cotação disponível para este ativo.');
+      }
     } catch (err) {
-      alert(err.message);
+      toast.error(err.message, { title: 'Não foi possível atualizar a cotação' });
     }
   }
 
@@ -159,11 +208,22 @@ export default function Investments() {
     setEditingInvestment(null);
   }
 
-  async function handleDeleteInvestment(id) {
-    if (!confirm('Excluir este investimento e todas as transações?')) return;
-    await investmentsAPI.delete(id);
-    setSelectedInvestment(null);
-    await loadAll();
+  async function handleDeleteInvestment(investment) {
+    const ok = await confirm({
+      title: 'Excluir investimento?',
+      message: `"${investment.name}" e todas as suas transações serão removidos.`,
+      confirmLabel: 'Excluir',
+    });
+    if (!ok) return;
+
+    try {
+      await investmentsAPI.delete(investment.id);
+      setSelectedInvestment(null);
+      await loadAll();
+      toast.success('Investimento excluído.');
+    } catch (err) {
+      toast.error(err.message, { title: 'Não foi possível excluir' });
+    }
   }
 
   async function handleSaveTransaction(data) {
@@ -179,40 +239,67 @@ export default function Investments() {
   }
 
   async function handleDeleteTransaction(txId) {
-    if (!confirm('Excluir esta transação?')) return;
-    await investmentTransactionsAPI.delete(txId);
-    await loadAll();
-    if (selectedInvestment) {
-      const txs = await investmentsAPI.getTransactions(selectedInvestment.id);
-      setDetailTransactions(txs);
-      const inv = await investmentsAPI.getById(selectedInvestment.id);
-      setSelectedInvestment(inv);
+    const ok = await confirm({
+      title: 'Excluir transação?',
+      message: 'O preço médio e a quantidade do ativo serão recalculados.',
+      confirmLabel: 'Excluir',
+    });
+    if (!ok) return;
+
+    try {
+      await investmentTransactionsAPI.delete(txId);
+      await loadAll();
+
+      if (selectedInvestment) {
+        const [txs, inv] = await Promise.all([
+          investmentsAPI.getTransactions(selectedInvestment.id),
+          investmentsAPI.getById(selectedInvestment.id),
+        ]);
+        setDetailTransactions(txs);
+        setSelectedInvestment(inv);
+      }
+
+      toast.success('Transação excluída. Preço médio e quantidade recalculados.');
+    } catch (err) {
+      toast.error(err.message, { title: 'Não foi possível excluir a transação' });
     }
   }
 
+  // Lança de propósito: o modal aguarda esta promessa para decidir se fecha e
+  // mostra o erro no próprio formulário.
   async function handleSaveGoal(data) {
     if (editingGoal) {
       await investmentGoalsAPI.update(editingGoal.id, data);
     } else {
       await investmentGoalsAPI.create(data);
     }
-    const goalsData = await investmentGoalsAPI.getAll();
-    setGoals(goalsData);
+    setGoals(await investmentGoalsAPI.getAll());
     setEditingGoal(null);
   }
 
-  async function handleDeleteGoal(id) {
-    if (!confirm('Excluir esta meta?')) return;
-    await investmentGoalsAPI.delete(id);
-    const goalsData = await investmentGoalsAPI.getAll();
-    setGoals(goalsData);
+  async function handleDeleteGoal(goal) {
+    const ok = await confirm({
+      title: 'Excluir meta de investimento?',
+      message: `"${goal.name}" será removida.`,
+      confirmLabel: 'Excluir',
+    });
+    if (!ok) return;
+
+    try {
+      await investmentGoalsAPI.delete(goal.id);
+      setGoals(await investmentGoalsAPI.getAll());
+      toast.success('Meta excluída.');
+    } catch (err) {
+      toast.error(err.message, { title: 'Não foi possível excluir' });
+    }
   }
 
-  if (loading) {
+  if (loading) return <LoadingState label="Carregando investimentos…" />;
+
+  if (loadError) {
     return (
-      <div className="flex flex-col items-center justify-center h-64 gap-3">
-        <div className="h-10 w-10 rounded-full border-2 border-primary-500 border-t-transparent animate-spin" />
-        <p className="text-gray-500 dark:text-gray-400 text-sm">Carregando investimentos...</p>
+      <div className="pt-6">
+        <ErrorState message={loadError} onRetry={loadAll} />
       </div>
     );
   }
@@ -258,7 +345,7 @@ export default function Investments() {
             <button
               type="button"
               className="btn btn-danger inline-flex items-center gap-2"
-              onClick={() => handleDeleteInvestment(inv.id)}
+              onClick={() => handleDeleteInvestment(inv)}
             >
               <Trash2 size={16} />
             </button>
@@ -321,6 +408,10 @@ export default function Investments() {
             </p>
           </div>
         </div>
+
+        {/* Por que o resultado é esse — só faz sentido para título público, onde a
+            diferença entre preço de compra e de venda distorce a leitura. */}
+        {inv.assetType === 'TESOURO_DIRETO' && <TreasuryResultBreakdown investment={inv} />}
 
         {/* Transações */}
         <div className="card">
@@ -484,6 +575,10 @@ export default function Investments() {
       </div>
 
       {/* Tab content */}
+      {tabError && activeTab !== 'carteira' && activeTab !== 'historico' && (
+        <ErrorState message={tabError} onRetry={() => setTabReloadKey((k) => k + 1)} />
+      )}
+
       {activeTab === 'carteira' && (
         <div>
           {investments.length === 0 ? (
@@ -516,7 +611,7 @@ export default function Investments() {
         </div>
       )}
 
-      {activeTab === 'dashboard' && (
+      {activeTab === 'dashboard' && !tabError && (
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
           <div className="card">
             <AllocationPieChart data={allocation?.byType} title="Alocação por Tipo" />
@@ -533,7 +628,7 @@ export default function Investments() {
         </div>
       )}
 
-      {activeTab === 'proventos' && (
+      {activeTab === 'proventos' && !tabError && (
         <div className="space-y-4">
           <div className="flex items-center justify-between">
             <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Proventos</h3>
@@ -591,7 +686,7 @@ export default function Investments() {
         </div>
       )}
 
-      {activeTab === 'metas' && (
+      {activeTab === 'metas' && !tabError && (
         <div className="space-y-4">
           <div className="flex items-center justify-between">
             <h3 className="text-lg font-semibold text-gray-900 dark:text-white">Metas de Investimento</h3>
@@ -607,7 +702,7 @@ export default function Investments() {
             <div className="rounded-xl border border-dashed border-gray-300 dark:border-gray-600 py-14 text-center">
               <Target className="w-12 h-12 mx-auto mb-3 text-gray-300 dark:text-gray-600" />
               <p className="font-medium text-gray-500 dark:text-gray-400">Nenhuma meta de investimento criada</p>
-              <p className="text-sm text-gray-400 dark:text-gray-500 mt-1">Defina metas como "Aposentadoria" ou "Reserva de emergência"</p>
+              <p className="text-sm text-gray-400 dark:text-gray-500 mt-1">Defina metas como &quot;Aposentadoria&quot; ou &quot;Reserva de emergência&quot;</p>
             </div>
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -616,7 +711,7 @@ export default function Investments() {
                   <GoalProgressCard goal={goal} onSelect={(g) => { setEditingGoal(g); setShowGoalModal(true); }} />
                   <button
                     type="button"
-                    onClick={() => handleDeleteGoal(goal.id)}
+                    onClick={() => handleDeleteGoal(goal)}
                     className="absolute top-3 right-3 p-1 text-gray-400 hover:text-red-500"
                     title="Excluir"
                   >

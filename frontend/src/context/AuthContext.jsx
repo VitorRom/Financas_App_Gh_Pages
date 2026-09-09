@@ -99,6 +99,31 @@ export function AuthProvider({ children }) {
     setUser(normalizeUser(nextUser));
   }, []);
 
+  /**
+   * Marca a apresentação de primeiro uso como vista. O estado local muda na hora
+   * para a janela fechar sem esperar a rede; se a chamada falhar, o pior caso é a
+   * apresentação reaparecer no próximo acesso.
+   */
+  const completeOnboarding = useCallback(async () => {
+    setUser((current) =>
+      current ? { ...current, onboardingCompletedAt: new Date().toISOString() } : current,
+    );
+    try {
+      const updated = await authAPI.completeOnboarding();
+      setUser(normalizeUser(updated));
+    } catch {
+      // Silencioso de propósito: é preferência de exibição, não dado do usuário.
+    }
+  }, []);
+
+  /**
+   * Reabre a apresentação. Mexe só no estado local — a data no banco continua lá,
+   * então concluir de novo não sobrescreve quando o usuário viu pela primeira vez.
+   */
+  const replayOnboarding = useCallback(() => {
+    setUser((current) => (current ? { ...current, onboardingCompletedAt: null } : current));
+  }, []);
+
   const value = useMemo(
     () => ({
       user,
@@ -108,8 +133,20 @@ export function AuthProvider({ children }) {
       logout,
       refreshUser,
       updateLocalUser,
+      completeOnboarding,
+      replayOnboarding,
     }),
-    [user, loading, login, register, logout, refreshUser, updateLocalUser],
+    [
+      user,
+      loading,
+      login,
+      register,
+      logout,
+      refreshUser,
+      updateLocalUser,
+      completeOnboarding,
+      replayOnboarding,
+    ],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

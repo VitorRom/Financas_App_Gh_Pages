@@ -20,6 +20,9 @@ import {
   Inbox,
 } from 'lucide-react';
 import { planningAPI, accountsAPI } from '../services/api.js';
+import { useToast } from '../context/ToastContext.jsx';
+import { useConfirm } from '../context/ConfirmContext.jsx';
+import { ErrorState, LoadingState } from '../components/ui/StateMessage.jsx';
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 
 function formatCurrency(value) {
@@ -30,7 +33,91 @@ function addMonths(date, months) {
   return new Date(date.getFullYear(), date.getMonth() + months, 1);
 }
 
-function FragmentRow({ row, idx, isOpen, onToggle, items, isItemActiveInMonth, formatStartMonthLabel }) {
+/**
+ * Meses de um item são absolutos: cada item guarda `startDate`, o primeiro dia do
+ * mês em que ele começa. Antes o campo era `startMonth`, um deslocamento em meses
+ * contado a partir de "hoje" — como "hoje" muda, o item era empurrado para o mês
+ * seguinte a cada virada de mês e nunca chegava. Comparar índices absolutos
+ * (ano × 12 + mês) elimina isso de vez.
+ */
+function monthIndexFromDate(date) {
+  return date.getFullYear() * 12 + date.getMonth();
+}
+
+/** O `startDate` é gravado em UTC, então precisa ser lido em UTC. */
+function monthIndexFromIso(iso) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return null;
+  return d.getUTCFullYear() * 12 + d.getUTCMonth();
+}
+
+function monthIndexToLabel(index) {
+  const d = new Date(Math.floor(index / 12), index % 12, 1);
+  return d.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+}
+
+/** Valor para `<input type="month">` — sempre no fuso UTC do dado guardado. */
+function isoToMonthInput(iso) {
+  if (!iso) return '';
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+}
+
+function currentMonthInput() {
+  const now = new Date();
+  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`;
+}
+
+/** "novembro de 2026" ou "novembro de 2026 → janeiro de 2027" para o formulário. */
+function monthInputRangeLabel(startInput, duration) {
+  if (!startInput) return '';
+  const [year, month] = startInput.split('-').map(Number);
+  if (!year || !month) return '';
+
+  const start = year * 12 + (month - 1);
+  const meses = Number(duration);
+  if (!Number.isFinite(meses) || meses <= 1) return monthIndexToLabel(start);
+  return `${monthIndexToLabel(start)} → ${monthIndexToLabel(start + meses - 1)}`;
+}
+
+/**
+ * Mês de início do item, em índice absoluto.
+ *
+ * `startDate` é a fonte da verdade. O segundo caminho existe para o caso de a API
+ * ainda não devolver o campo — uma versão anterior do backend em execução, por
+ * exemplo. Nesse caso o mês é reconstruído a partir de `createdAt + startMonth`,
+ * exatamente a mesma regra do backfill, em vez de deixar o item sem âncora: sem
+ * âncora ele seria considerado ativo em todos os meses, e a projeção inteira ficaria
+ * errada de um jeito difícil de perceber.
+ */
+function itemStartMonthIndex(item) {
+  if (item.startDate) return monthIndexFromIso(item.startDate);
+
+  if (item.createdAt) {
+    const criado = new Date(item.createdAt);
+    if (!Number.isNaN(criado.getTime())) {
+      return criado.getUTCFullYear() * 12 + criado.getUTCMonth() + (item.startMonth ?? 0);
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Janela de atividade do item, em índices absolutos de mês.
+ * `end` é exclusivo; `null` significa vitalício.
+ */
+function itemWindow(item) {
+  const start = itemStartMonthIndex(item);
+  if (start == null) return { start: null, end: null };
+  return {
+    start,
+    end: item.monthsDuration == null ? null : start + item.monthsDuration,
+  };
+}
+
+function FragmentRow({ row, idx, isOpen, onToggle, items, isItemActiveInMonth }) {
   return (
     <Fragment>
       <tr
@@ -89,12 +176,7 @@ function FragmentRow({ row, idx, isOpen, onToggle, items, isItemActiveInMonth, f
       {isOpen && (
         <tr className="bg-gray-50/60 dark:bg-gray-900/40">
           <td colSpan={6} className="p-0">
-            <MonthDetail
-              row={row}
-              items={items}
-              isItemActiveInMonth={isItemActiveInMonth}
-              formatStartMonthLabel={formatStartMonthLabel}
-            />
+            <MonthDetail row={row} items={items} isItemActiveInMonth={isItemActiveInMonth} />
           </td>
         </tr>
       )}
@@ -102,7 +184,7 @@ function FragmentRow({ row, idx, isOpen, onToggle, items, isItemActiveInMonth, f
   );
 }
 
-function MonthDetail({ row, items, isItemActiveInMonth, formatStartMonthLabel }) {
+function MonthDetail({ row, items, isItemActiveInMonth }) {
   const incomes = items.filter(
     (it) => it.enabled && it.type === 'income' && isItemActiveInMonth(it, row.monthIndex),
   );
@@ -112,7 +194,7 @@ function MonthDetail({ row, items, isItemActiveInMonth, formatStartMonthLabel })
   const totalCount = incomes.length + expenses.length;
 
   function ItemRow({ it }) {
-    const startOffset = it.startMonth ?? 0;
+    const { start } = itemWindow(it);
     return (
       <div
         className={`flex items-center justify-between gap-3 px-3 py-2 rounded-lg border ${
@@ -140,9 +222,9 @@ function MonthDetail({ row, items, isItemActiveInMonth, formatStartMonthLabel })
             <div className="text-[11px] text-gray-500 dark:text-gray-400 flex items-center gap-1.5">
               <Calendar className="w-3 h-3" />
               <span>dia {it.dayOfMonth}</span>
-              {startOffset > 0 && (
+              {start != null && start === row.monthIndex && (
                 <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-sky-100/80 dark:bg-sky-900/40 text-sky-800 dark:text-sky-300 text-[10px] font-semibold uppercase tracking-wide">
-                  inicia mês {startOffset}
+                  primeiro mês
                 </span>
               )}
               {it.monthsDuration != null && (
@@ -257,13 +339,71 @@ function MonthDetail({ row, items, isItemActiveInMonth, formatStartMonthLabel })
   );
 }
 
+/**
+ * Tarjas de período do item, sempre em meses absolutos. Um item cuja janela já
+ * passou fica marcado como encerrado — senão ele some da projeção sem explicação.
+ */
+function ItemPeriodBadges({ item }) {
+  const { start, end } = itemWindow(item);
+  const thisMonth = monthIndexFromDate(new Date());
+
+  const encerrado = end != null && end <= thisMonth;
+  const aguardando = start != null && start > thisMonth;
+
+  const base =
+    'inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md text-[10px] font-semibold uppercase tracking-wide';
+
+  return (
+    <>
+      {start != null && (
+        <span className={`${base} bg-sky-100/80 dark:bg-sky-900/40 text-sky-800 dark:text-sky-300`}>
+          {end == null
+            ? `A partir de ${monthIndexToLabel(start)}`
+            : `${monthIndexToLabel(start)} → ${monthIndexToLabel(end - 1)}`}
+        </span>
+      )}
+
+      {item.monthsDuration != null ? (
+        <span className={`${base} bg-amber-100/80 dark:bg-amber-900/40 text-amber-800 dark:text-amber-300`}>
+          {item.monthsDuration} {item.monthsDuration === 1 ? 'mês' : 'meses'}
+        </span>
+      ) : (
+        <span className={`${base} bg-violet-100/80 dark:bg-violet-900/40 text-violet-800 dark:text-violet-300`}>
+          Vitalícia
+        </span>
+      )}
+
+      {encerrado && (
+        <span className={`${base} bg-gray-200 dark:bg-gray-700 text-gray-600 dark:text-gray-300`}>
+          Encerrada
+        </span>
+      )}
+      {aguardando && (
+        <span className={`${base} bg-emerald-100/80 dark:bg-emerald-900/40 text-emerald-800 dark:text-emerald-300`}>
+          Ainda não começou
+        </span>
+      )}
+    </>
+  );
+}
+
 export default function Planning() {
+  const toast = useToast();
+  const confirm = useConfirm();
+  const [loadError, setLoadError] = useState(null);
   const [items, setItems] = useState([]);
   const [loading, setLoading] = useState(true);
   const [monthsAhead, setMonthsAhead] = useState(12);
   const [manualAdjustment, setManualAdjustment] = useState('0');
   const [accounts, setAccounts] = useState([]);
-  const [form, setForm] = useState({ name: '', amount: '', type: 'expense', dayOfMonth: 1, monthsDuration: '', startMonth: '' });
+  const [form, setForm] = useState({
+    name: '',
+    amount: '',
+    type: 'expense',
+    dayOfMonth: 1,
+    monthsDuration: '',
+    startDate: currentMonthInput(),
+  });
   const [editing, setEditing] = useState(null);
   const [expandedMonth, setExpandedMonth] = useState(null);
 
@@ -273,47 +413,63 @@ export default function Planning() {
 
   async function load() {
     setLoading(true);
-    const [data, accs] = await Promise.all([planningAPI.list(), accountsAPI.getAll()]);
-    setItems(data);
-    setAccounts(accs || []);
-    setLoading(false);
+    setLoadError(null);
+    try {
+      const [data, accs] = await Promise.all([planningAPI.list(), accountsAPI.getAll()]);
+      setItems(data);
+      setAccounts(accs || []);
+    } catch (err) {
+      setLoadError(err.message);
+    } finally {
+      setLoading(false);
+    }
   }
 
   useEffect(() => {
     load();
   }, []);
 
+  /** @param {number} monthIndex índice absoluto de mês (ano × 12 + mês) */
   function isItemActiveInMonth(item, monthIndex) {
     if (!item.enabled) return false;
-    const start = item.startMonth ?? 0;
+    const { start, end } = itemWindow(item);
+    if (start == null) return true; // item antigo, sem mês de início: sempre ativo
     if (monthIndex < start) return false;
-    if (item.monthsDuration == null) return true;
-    return monthIndex < start + item.monthsDuration;
-  }
-
-  function formatStartMonthLabel(offset) {
-    const safeOffset = Math.max(0, Number(offset) || 0);
-    if (safeOffset === 0) return 'mês atual';
-    const d = addMonths(new Date(), safeOffset);
-    return d.toLocaleDateString('pt-BR', { month: 'short', year: 'numeric' }).replace('.', '');
+    return end == null || monthIndex < end;
   }
 
   const totals = useMemo(() => {
+    const thisMonth = monthIndexFromDate(new Date());
     const income = items
-      .filter((i) => i.enabled && i.type === 'income' && isItemActiveInMonth(i, 0))
+      .filter((i) => i.enabled && i.type === 'income' && isItemActiveInMonth(i, thisMonth))
       .reduce((s, i) => s + Number(i.amount), 0);
     const expense = items
-      .filter((i) => i.enabled && i.type === 'expense' && isItemActiveInMonth(i, 0))
+      .filter((i) => i.enabled && i.type === 'expense' && isItemActiveInMonth(i, thisMonth))
       .reduce((s, i) => s + Number(i.amount), 0);
     return { income, expense, net: income - expense };
   }, [items]);
 
-  const currentAccountsTotal = useMemo(
-    () => accounts
-      .filter((a) => a.type !== 'investment')
-      .reduce((sum, a) => sum + (a.balance || 0), 0),
-    [accounts]
+  /**
+   * Valor de uma conta. Contas de investimento guardam `balance = 0` — o que elas
+   * valem vem das posições dos ativos, que a API manda em `investedValue`.
+   */
+  const accountValue = (account) =>
+    account.type === 'investment' ? account.investedValue || 0 : account.balance || 0;
+
+  const cashTotal = useMemo(
+    () => accounts.filter((a) => a.type !== 'investment').reduce((sum, a) => sum + accountValue(a), 0),
+    [accounts],
   );
+
+  const investedTotal = useMemo(
+    () => accounts.filter((a) => a.type === 'investment').reduce((sum, a) => sum + accountValue(a), 0),
+    [accounts],
+  );
+
+  // Aqui o investimento entra: a projeção é de patrimônio ao longo do tempo, e o que
+  // já está investido faz parte do ponto de partida. (No Dashboard não entra, porque
+  // lá o número é de caixa disponível — são perguntas diferentes.)
+  const currentAccountsTotal = cashTotal + investedTotal;
 
   const debtsTotal = useMemo(
     () => accounts
@@ -331,20 +487,22 @@ export default function Planning() {
     const rows = [];
 
     for (let i = 0; i < months; i++) {
+      const d = addMonths(start, i);
+      const absoluteMonth = monthIndexFromDate(d);
+
       const monthIncome = items
-        .filter((it) => it.type === 'income' && isItemActiveInMonth(it, i))
+        .filter((it) => it.type === 'income' && isItemActiveInMonth(it, absoluteMonth))
         .reduce((s, it) => s + Number(it.amount), 0);
       const monthExpense = items
-        .filter((it) => it.type === 'expense' && isItemActiveInMonth(it, i))
+        .filter((it) => it.type === 'expense' && isItemActiveInMonth(it, absoluteMonth))
         .reduce((s, it) => s + Number(it.amount), 0);
       const monthNet = monthIncome - monthExpense;
 
       balance += monthNet;
-      const d = addMonths(start, i);
       const labelShort = d.toLocaleDateString('pt-BR', { month: 'short', year: '2-digit' });
       rows.push({
         key: `${d.getFullYear()}-${d.getMonth() + 1}`,
-        monthIndex: i,
+        monthIndex: absoluteMonth,
         month: d.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' }),
         labelShort,
         income: monthIncome,
@@ -368,21 +526,39 @@ export default function Planning() {
       if (payload.monthsDuration === '' || payload.monthsDuration == null) {
         delete payload.monthsDuration;
       }
-      if (payload.startMonth === '' || payload.startMonth == null) {
-        delete payload.startMonth;
-      }
+      if (!payload.startDate) delete payload.startDate;
+
       await planningAPI.create(payload);
-      setForm({ name: '', amount: '', type: form.type, dayOfMonth: 1, monthsDuration: '', startMonth: '' });
+      setForm({
+        name: '',
+        amount: '',
+        type: form.type,
+        dayOfMonth: 1,
+        monthsDuration: '',
+        startDate: currentMonthInput(),
+      });
       await load();
+      toast.success('Item adicionado ao planejamento.');
     } catch (err) {
-      alert(err.message);
+      toast.error(err.message, { title: 'Não foi possível adicionar' });
     }
   }
 
-  async function onDelete(id) {
-    if (!confirm('Excluir item?')) return;
-    await planningAPI.delete(id);
-    load();
+  async function onDelete(item) {
+    const ok = await confirm({
+      title: 'Excluir item do planejamento?',
+      message: `"${item.name}" sairá da projeção.`,
+      confirmLabel: 'Excluir',
+    });
+    if (!ok) return;
+
+    try {
+      await planningAPI.delete(item.id);
+      load();
+      toast.success('Item excluído.');
+    } catch (err) {
+      toast.error(err.message, { title: 'Não foi possível excluir' });
+    }
   }
 
   function openEdit(item) {
@@ -393,7 +569,7 @@ export default function Planning() {
       type: item.type ?? 'expense',
       dayOfMonth: item.dayOfMonth ?? 1,
       monthsDuration: item.monthsDuration == null ? '' : String(item.monthsDuration),
-      startMonth: item.startMonth == null ? '' : String(item.startMonth),
+      startDate: isoToMonthInput(item.startDate) || currentMonthInput(),
     });
   }
 
@@ -411,11 +587,7 @@ export default function Planning() {
       } else {
         payload.monthsDuration = Number(payload.monthsDuration);
       }
-      if (payload.startMonth === '' || payload.startMonth == null) {
-        delete payload.startMonth;
-      } else {
-        payload.startMonth = Number(payload.startMonth);
-      }
+      if (!payload.startDate) delete payload.startDate;
       if (payload.dayOfMonth === '' || payload.dayOfMonth == null) {
         payload.dayOfMonth = 1;
       } else {
@@ -426,16 +598,18 @@ export default function Planning() {
       await planningAPI.update(editing.id, payload);
       setEditing(null);
       await load();
+      toast.success('Item atualizado.');
     } catch (err) {
-      alert(err.message);
+      toast.error(err.message, { title: 'Não foi possível salvar' });
     }
   }
 
-  if (loading) {
+  if (loading) return <LoadingState label="Carregando planejamento…" />;
+
+  if (loadError) {
     return (
-      <div className="flex flex-col items-center justify-center h-64 gap-3">
-        <div className="h-10 w-10 rounded-full border-2 border-primary-500 border-t-transparent animate-spin" />
-        <div className="text-gray-500 dark:text-gray-400 text-sm">Carregando planejamento…</div>
+      <div className="pt-6">
+        <ErrorState message={loadError} onRetry={load} />
       </div>
     );
   }
@@ -502,22 +676,20 @@ export default function Planning() {
                 />
               </div>
               <div>
-                <label className="label flex items-center justify-between">
-                  <span>Início (em quantos meses)</span>
-                  <span className="text-[10px] font-normal text-gray-500 dark:text-gray-400">Vazio = mês atual</span>
+                <label className="label" htmlFor="planning-start">
+                  Mês de início
                 </label>
                 <input
+                  id="planning-start"
                   className="input"
-                  value={form.startMonth}
-                  onChange={(e) => setForm({ ...form, startMonth: e.target.value })}
-                  type="number"
-                  min="0"
-                  max="600"
-                  placeholder="Ex.: 3 (começa em 3 meses)"
+                  type="month"
+                  value={form.startDate}
+                  onChange={(e) => setForm({ ...form, startDate: e.target.value })}
+                  required
                 />
-                {form.startMonth !== '' && Number(form.startMonth) > 0 && (
-                  <div className="mt-1 text-[11px] text-violet-700 dark:text-violet-300">
-                    Começará em: <strong className="font-semibold">{formatStartMonthLabel(form.startMonth)}</strong>
+                {form.startDate && (
+                  <div className="mt-1 text-[11px] text-violet-700 dark:text-violet-300 first-letter:uppercase">
+                    {monthInputRangeLabel(form.startDate, form.monthsDuration)}
                   </div>
                 )}
               </div>
@@ -544,20 +716,24 @@ export default function Planning() {
                         key={a.id}
                         className={`inline-flex items-center gap-1.5 text-xs font-medium px-2.5 py-1 rounded-lg border shadow-sm ${
                           isInvestment
-                            ? 'bg-violet-50/80 dark:bg-violet-950/30 border-violet-200 dark:border-violet-800/60 opacity-80'
+                            ? 'bg-violet-50/80 dark:bg-violet-950/30 border-violet-200 dark:border-violet-800/60'
                             : 'bg-white dark:bg-gray-800 border-gray-200 dark:border-gray-600'
                         }`}
                       >
-                        <span className={`truncate max-w-[7rem] ${isInvestment ? 'italic text-gray-600 dark:text-gray-300' : 'text-gray-700 dark:text-gray-200'}`}>
-                          {a.name}
-                        </span>
+                        <span className="truncate max-w-[7rem] text-gray-700 dark:text-gray-200">{a.name}</span>
                         {isInvestment && (
                           <span className="text-[9px] font-semibold uppercase tracking-wide text-violet-600 dark:text-violet-400">
                             invest.
                           </span>
                         )}
-                        <span className={!isInvestment && (a.balance || 0) < 0 ? 'text-red-600 dark:text-red-400' : 'text-gray-900 dark:text-gray-100'}>
-                          {formatCurrency(a.balance || 0)}
+                        <span
+                          className={
+                            accountValue(a) < 0
+                              ? 'text-red-600 dark:text-red-400'
+                              : 'text-gray-900 dark:text-gray-100'
+                          }
+                        >
+                          {formatCurrency(accountValue(a))}
                         </span>
                       </span>
                     );
@@ -568,17 +744,31 @@ export default function Planning() {
                 </div>
                 <div className="grid grid-cols-2 gap-2 text-xs">
                   <div className="rounded-lg bg-white/80 dark:bg-gray-800/80 p-2.5 border border-gray-100 dark:border-gray-700">
-                    <div className="text-gray-500 dark:text-gray-400">Total contas</div>
-                    <div className="font-bold tabular-nums text-gray-900 dark:text-white mt-0.5">{formatCurrency(currentAccountsTotal)}</div>
+                    <div className="text-gray-500 dark:text-gray-400">Em conta</div>
+                    <div className="font-bold tabular-nums text-gray-900 dark:text-white mt-0.5">{formatCurrency(cashTotal)}</div>
                   </div>
-                  <div className="rounded-lg bg-red-50/90 dark:bg-red-950/35 p-2.5 border border-red-100 dark:border-red-900/50">
+                  {investedTotal > 0 ? (
+                    <div className="rounded-lg bg-violet-50/90 dark:bg-violet-950/35 p-2.5 border border-violet-100 dark:border-violet-900/50">
+                      <div className="text-violet-700/80 dark:text-violet-300/90">Investido</div>
+                      <div className="font-bold tabular-nums text-violet-700 dark:text-violet-300 mt-0.5">{formatCurrency(investedTotal)}</div>
+                    </div>
+                  ) : (
+                    <div className="rounded-lg bg-red-50/90 dark:bg-red-950/35 p-2.5 border border-red-100 dark:border-red-900/50">
+                      <div className="text-red-700/80 dark:text-red-300/90">Dívidas (neg.)</div>
+                      <div className="font-bold tabular-nums text-red-700 dark:text-red-300 mt-0.5">{formatCurrency(debtsTotal)}</div>
+                    </div>
+                  )}
+                </div>
+                {investedTotal > 0 && debtsTotal < 0 && (
+                  <div className="rounded-lg bg-red-50/90 dark:bg-red-950/35 p-2.5 border border-red-100 dark:border-red-900/50 text-xs">
                     <div className="text-red-700/80 dark:text-red-300/90">Dívidas (neg.)</div>
                     <div className="font-bold tabular-nums text-red-700 dark:text-red-300 mt-0.5">{formatCurrency(debtsTotal)}</div>
                   </div>
-                </div>
-                {accounts.some((a) => a.type === 'investment') && (
+                )}
+                {investedTotal > 0 && (
                   <p className="text-[10px] text-gray-500 dark:text-gray-400 leading-relaxed">
-                    Excluindo contas de investimento do saldo base.
+                    O valor investido entra no saldo base: a projeção é de patrimônio, e ele já é seu.
+                    Vem das posições da aba Investimentos, com a cotação mais recente.
                   </p>
                 )}
               </div>
@@ -731,7 +921,6 @@ export default function Planning() {
                         onToggle={() => toggleMonth(r.key)}
                         items={items}
                         isItemActiveInMonth={isItemActiveInMonth}
-                        formatStartMonthLabel={formatStartMonthLabel}
                       />
                     );
                   })}
@@ -776,20 +965,7 @@ export default function Planning() {
                         <div className="font-semibold text-gray-900 dark:text-white truncate">{i.name}</div>
                         <div className="text-xs text-gray-600 dark:text-gray-400 mt-0.5 flex flex-wrap items-center gap-1.5">
                           <span>{i.type === 'income' ? 'Receita' : 'Despesa'} • dia {i.dayOfMonth}</span>
-                          {(i.startMonth ?? 0) > 0 && (
-                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-sky-100/80 dark:bg-sky-900/40 text-sky-800 dark:text-sky-300 text-[10px] font-semibold uppercase tracking-wide">
-                              Inicia em {i.startMonth} {i.startMonth === 1 ? 'mês' : 'meses'} ({formatStartMonthLabel(i.startMonth)})
-                            </span>
-                          )}
-                          {i.monthsDuration != null ? (
-                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-amber-100/80 dark:bg-amber-900/40 text-amber-800 dark:text-amber-300 text-[10px] font-semibold uppercase tracking-wide">
-                              Temporária • {i.monthsDuration} {i.monthsDuration === 1 ? 'mês' : 'meses'}
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-md bg-violet-100/80 dark:bg-violet-900/40 text-violet-800 dark:text-violet-300 text-[10px] font-semibold uppercase tracking-wide">
-                              Vitalícia
-                            </span>
-                          )}
+                          <ItemPeriodBadges item={i} />
                         </div>
                       </div>
                     </div>
@@ -801,7 +977,7 @@ export default function Planning() {
                         <Pencil className="w-3.5 h-3.5" />
                         Editar
                       </button>
-                      <button type="button" className="btn btn-danger px-3 py-1.5 text-sm inline-flex items-center gap-1" onClick={() => onDelete(i.id)}>
+                      <button type="button" className="btn btn-danger px-3 py-1.5 text-sm inline-flex items-center gap-1" onClick={() => onDelete(i)}>
                         <Trash2 className="w-3.5 h-3.5" />
                         Excluir
                       </button>
@@ -895,22 +1071,20 @@ export default function Planning() {
                 />
               </div>
               <div>
-                <label className="label flex items-center justify-between">
-                  <span>Início (em quantos meses)</span>
-                  <span className="text-[10px] font-normal text-gray-500 dark:text-gray-400">Vazio = mês atual</span>
+                <label className="label" htmlFor="planning-edit-start">
+                  Mês de início
                 </label>
                 <input
+                  id="planning-edit-start"
                   className="input"
-                  type="number"
-                  min="0"
-                  max="600"
-                  value={editing.startMonth}
-                  onChange={(e) => setEditing({ ...editing, startMonth: e.target.value })}
-                  placeholder="Ex.: 3 (começa em 3 meses)"
+                  type="month"
+                  value={editing.startDate}
+                  onChange={(e) => setEditing({ ...editing, startDate: e.target.value })}
+                  required
                 />
-                {editing.startMonth !== '' && Number(editing.startMonth) > 0 && (
-                  <div className="mt-1 text-[11px] text-violet-700 dark:text-violet-300">
-                    Começará em: <strong className="font-semibold">{formatStartMonthLabel(editing.startMonth)}</strong>
+                {editing.startDate && (
+                  <div className="mt-1 text-[11px] text-violet-700 dark:text-violet-300 first-letter:uppercase">
+                    {monthInputRangeLabel(editing.startDate, editing.monthsDuration)}
                   </div>
                 )}
               </div>

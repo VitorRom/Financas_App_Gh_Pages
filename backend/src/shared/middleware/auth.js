@@ -3,7 +3,7 @@ import { JWT_SECRET } from '../config/jwt.js';
 import prisma from '../lib/prisma.js';
 import { AppError } from '../utils/errors.js';
 
-export function authMiddleware(req, res, next) {
+export async function authMiddleware(req, res, next) {
   const authHeader = req.headers.authorization;
 
   if (!authHeader?.startsWith('Bearer ')) {
@@ -12,15 +12,31 @@ export function authMiddleware(req, res, next) {
 
   const token = authHeader.split(' ')[1];
 
+  let decoded;
   try {
-    const decoded = jwt.verify(token, JWT_SECRET);
-    req.user = { id: decoded.userId };
-    next();
+    decoded = jwt.verify(token, JWT_SECRET);
   } catch (error) {
     if (error.name === 'TokenExpiredError') {
       return next(new AppError('Token expirado', 401));
     }
     return next(new AppError('Token inválido', 401));
+  }
+
+  try {
+    // Confere a versão do token: uma troca de senha invalida os anteriores.
+    const user = await prisma.user.findUnique({
+      where: { id: decoded.userId },
+      select: { id: true, tokenVersion: true },
+    });
+
+    if (!user || user.tokenVersion !== (decoded.tv ?? 0)) {
+      return next(new AppError('Sessão expirada. Entre novamente.', 401));
+    }
+
+    req.user = { id: user.id };
+    next();
+  } catch (error) {
+    next(error);
   }
 }
 

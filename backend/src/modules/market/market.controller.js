@@ -1,12 +1,17 @@
-import { getQuote, getCDI, getIBOV, searchAssets } from '../../services/brapi.js';
+import { getQuote, getQuoteForAsset, getCDI, getIBOV, searchAssets } from '../../services/brapi.js';
+import { listAllTreasury } from '../../services/tesouroTransparente.js';
 import * as investmentsService from '../investments/investments.service.js';
 import prisma from '../../shared/lib/prisma.js';
 
 export async function getTickerQuote(req, res, next) {
   try {
     const { ticker } = req.params;
+    const { assetType } = req.query;
     if (!ticker) return res.status(400).json({ error: 'Ticker é obrigatório' });
-    const quote = await getQuote(ticker);
+
+    // Título do Tesouro não existe na BrAPI: a cotação vem do Tesouro Transparente.
+    // Sem o tipo do ativo, a rota respondia 404 para todo título público.
+    const quote = assetType ? await getQuoteForAsset(assetType, ticker) : await getQuote(ticker);
     if (quote?.unauthorized) {
       return res.status(401).json({ error: 'BrAPI token inválido ou ausente. Configure BRAPI_TOKEN no .env.' });
     }
@@ -54,4 +59,37 @@ export async function getIndexHistory(req, res, next) {
     });
     res.json(history);
   } catch (error) { next(error); }
+}
+
+/**
+ * Catálogo de títulos do Tesouro Direto disponíveis.
+ *
+ * Existe porque indexador + vencimento não identificam um título: oito vencimentos
+ * têm duas versões, uma com juros semestrais e outra sem. Deixar o usuário escolher
+ * da lista é o único jeito de não gravar o papel errado.
+ */
+export async function listTreasuryTitles(req, res, next) {
+  try {
+    const hoje = new Date().toISOString().slice(0, 10);
+
+    const titles = (await listAllTreasury())
+      .filter((t) => t.ticker && (t.maturityDate || '') >= hoje)
+      .map((t) => ({
+        ticker: t.ticker,
+        name: t.name,
+        indexer: t.indexer,
+        couponType: t.couponType,
+        maturityDate: t.maturityDate,
+        buyPrice: t.buyPrice,
+        buyRate: t.buyRate,
+        sellPrice: t.sellPrice,
+        sellRate: t.sellRate,
+        baseDate: t.baseDate,
+      }))
+      .sort((a, b) => (a.maturityDate || '').localeCompare(b.maturityDate || ''));
+
+    res.json({ count: titles.length, titles });
+  } catch (error) {
+    next(error);
+  }
 }

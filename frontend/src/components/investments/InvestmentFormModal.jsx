@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
 import { X } from 'lucide-react';
 import { accountsAPI, marketAPI } from '../../services/api.js';
+import { useToast } from '../../context/ToastContext.jsx';
+import TreasuryPicker from './TreasuryPicker.jsx';
 
 const ASSET_TYPES = [
   { value: 'RENDA_FIXA', label: 'Renda Fixa' },
@@ -26,12 +28,72 @@ const INDEXERS = [
 const REQUIRES_TICKER = ['ACAO', 'FII', 'ETF', 'CRIPTO'];
 const FIXED_INCOME_TYPES = ['RENDA_FIXA', 'TESOURO_DIRETO'];
 
+function formatBRL(v) {
+  return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(v);
+}
+
+/**
+ * Condições de mercado do título, vindas do Tesouro Transparente.
+ *
+ * Aparece no lugar do campo de taxa que existia aqui: a taxa do cadastro era digitada
+ * e depois substituída pela média das taxas dos aportes, então o usuário informava o
+ * mesmo dado duas vezes. O que vale saber neste ponto é a condição de hoje — e essa
+ * a API já publica.
+ */
+function TreasuryReference({ quote }) {
+  if (!quote) return null;
+
+  const formatRate = (rate) => (rate == null ? '—' : `${Number(rate).toFixed(2).replace('.', ',')}%`);
+
+  return (
+    <div className="rounded-lg border border-violet-100 dark:border-violet-900/50 bg-violet-50/70 dark:bg-violet-950/25 px-4 py-3">
+      <div className="flex items-baseline justify-between gap-2">
+        <p className="text-xs font-semibold text-violet-800 dark:text-violet-300">{quote.name}</p>
+        {quote.baseDate && (
+          <p className="text-[10px] text-violet-700/70 dark:text-violet-400/70">
+            Tesouro Transparente · {quote.baseDate.split('-').reverse().join('/')}
+          </p>
+        )}
+      </div>
+      <dl className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1.5 text-[11px]">
+        <div className="flex justify-between">
+          <dt className="text-gray-600 dark:text-gray-400">Taxa de compra</dt>
+          <dd className="font-semibold tabular-nums text-gray-900 dark:text-gray-100">{formatRate(quote.buyRate)}</dd>
+        </div>
+        <div className="flex justify-between">
+          <dt className="text-gray-600 dark:text-gray-400">PU de compra</dt>
+          <dd className="font-semibold tabular-nums text-gray-900 dark:text-gray-100">
+            {quote.buyPrice != null ? formatBRL(quote.buyPrice) : '—'}
+          </dd>
+        </div>
+        <div className="flex justify-between">
+          <dt className="text-gray-600 dark:text-gray-400">Taxa de venda</dt>
+          <dd className="font-semibold tabular-nums text-gray-900 dark:text-gray-100">{formatRate(quote.sellRate)}</dd>
+        </div>
+        <div className="flex justify-between">
+          <dt className="text-gray-600 dark:text-gray-400">PU de venda</dt>
+          <dd className="font-semibold tabular-nums text-gray-900 dark:text-gray-100">
+            {quote.sellPrice != null ? formatBRL(quote.sellPrice) : '—'}
+          </dd>
+        </div>
+      </dl>
+      <p className="mt-2 text-[10px] leading-relaxed text-violet-800/70 dark:text-violet-300/70">
+        A taxa que você travar entra no aporte, não aqui. A taxa do ativo passa a ser a
+        média das taxas dos seus aportes, ponderada pela quantidade.
+      </p>
+    </div>
+  );
+}
+
 export default function InvestmentFormModal({ isOpen, onClose, onSave, investment }) {
+  const toast = useToast();
   const isEdit = !!investment;
   const [accounts, setAccounts] = useState([]);
   const [tickerWarning, setTickerWarning] = useState('');
+  // Título do Tesouro escolhido na lista. Já vem com PU e taxa do dia, então serve
+  // como referência na tela sem uma segunda chamada à API.
+  const [selectedTreasury, setSelectedTreasury] = useState(null);
   const [saving, setSaving] = useState(false);
-  const [brokerManuallyEdited, setBrokerManuallyEdited] = useState(false);
 
   const [form, setForm] = useState({
     assetType: 'ACAO',
@@ -49,7 +111,10 @@ export default function InvestmentFormModal({ isOpen, onClose, onSave, investmen
 
   useEffect(() => {
     if (isOpen) {
-      accountsAPI.getAll().then(setAccounts).catch(() => {});
+      accountsAPI
+        .getAll()
+        .then(setAccounts)
+        .catch((err) => toast.error(err.message, { title: 'Não foi possível carregar as contas' }));
       if (investment) {
         setForm({
           assetType: investment.assetType,
@@ -64,19 +129,14 @@ export default function InvestmentFormModal({ isOpen, onClose, onSave, investmen
           purchaseDate: investment.purchaseDate ? new Date(investment.purchaseDate).toISOString().split('T')[0] : '',
           notes: investment.notes || '',
         });
-        // Em modo edição, se já houver broker preenchido, trata como manual para
-        // não sobrescrever ao trocar a conta de origem.
-        setBrokerManuallyEdited(!!investment.broker);
       } else {
         setForm((f) => ({ ...f, assetType: 'ACAO', ticker: '', name: '', broker: '', accountId: '', indexer: 'CDI', interestRate: '', maturityDate: '', liquidityDays: '', purchaseDate: new Date().toISOString().split('T')[0], notes: '' }));
-        setBrokerManuallyEdited(false);
       }
       setTickerWarning('');
     }
-  }, [isOpen, investment]);
+  }, [isOpen, investment, toast]);
 
   const selectedAccount = accounts.find((a) => a.id === form.accountId) || null;
-  const isPrefilled = !brokerManuallyEdited && selectedAccount?.type === 'investment' && form.broker === selectedAccount.name;
 
   async function validateTicker() {
     if (!form.ticker) return;
@@ -100,6 +160,10 @@ export default function InvestmentFormModal({ isOpen, onClose, onSave, investmen
     }
   }
 
+  const isTreasury = form.assetType === 'TESOURO_DIRETO';
+  const investmentAccounts = accounts.filter((a) => a.type === 'investment');
+  const otherAccounts = accounts.filter((a) => a.type !== 'investment');
+
   async function handleSubmit(e) {
     e.preventDefault();
     setSaving(true);
@@ -113,7 +177,7 @@ export default function InvestmentFormModal({ isOpen, onClose, onSave, investmen
       });
       onClose();
     } catch (err) {
-      alert(err.message);
+      toast.error(err.message, { title: 'Não foi possível salvar' });
     } finally {
       setSaving(false);
     }
@@ -171,52 +235,92 @@ export default function InvestmentFormModal({ isOpen, onClose, onSave, investmen
             <p className="text-xs text-amber-600 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/30 px-3 py-2 rounded-lg">{tickerWarning}</p>
           )}
 
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="label">Corretora</label>
-              <input
-                className="input"
-                value={form.broker}
-                onChange={(e) => {
-                  setBrokerManuallyEdited(true);
-                  setForm({ ...form, broker: e.target.value });
-                }}
-                placeholder="Ex: XP"
-              />
-              {isPrefilled && (
-                <p className="mt-1 text-[11px] text-violet-700 dark:text-violet-300">
-                  Pré-preenchido a partir da conta de origem.
-                </p>
+          {/* A conta de investimento já é a corretora; pedir os dois era digitar o
+              mesmo dado duas vezes. O campo de corretora só aparece quando o ativo
+              não está vinculado a nenhuma conta. */}
+          <div>
+            <label className="label" htmlFor="investment-account">
+              Onde está guardado
+            </label>
+            <select
+              id="investment-account"
+              className="select"
+              value={form.accountId}
+              onChange={(e) => {
+                const newId = e.target.value;
+                const acc = accounts.find((a) => a.id === newId);
+                setForm({
+                  ...form,
+                  accountId: newId,
+                  // A corretora passa a ser o nome da conta; sem conta, volta a ser digitada.
+                  broker: acc ? acc.name : '',
+                });
+              }}
+            >
+              <option value="">Nenhuma conta vinculada</option>
+              {investmentAccounts.length > 0 && (
+                <optgroup label="Contas de investimento">
+                  {investmentAccounts.map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.name}
+                    </option>
+                  ))}
+                </optgroup>
               )}
-            </div>
-            <div>
-              <label className="label">Conta de origem</label>
-              <select
-                className="select"
-                value={form.accountId}
-                onChange={(e) => {
-                  const newId = e.target.value;
-                  const acc = accounts.find((a) => a.id === newId);
-                  const shouldPrefill = !brokerManuallyEdited && acc?.type === 'investment';
-                  setForm({
-                    ...form,
-                    accountId: newId,
-                    broker: shouldPrefill && acc ? acc.name : form.broker,
-                  });
-                }}
-              >
-                <option value="">Nenhuma</option>
-                {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-              </select>
-              {selectedAccount?.type === 'investment' && (
-                <p className="mt-1 text-[11px] text-gray-500 dark:text-gray-400">
-                  Conta de investimento selecionada.
-                </p>
+              {otherAccounts.length > 0 && (
+                <optgroup label="Outras contas">
+                  {otherAccounts.map((a) => (
+                    <option key={a.id} value={a.id}>
+                      {a.name}
+                    </option>
+                  ))}
+                </optgroup>
               )}
-            </div>
+            </select>
+            <p className="mt-1 text-[11px] text-gray-500 dark:text-gray-400">
+              {selectedAccount
+                ? `A corretora deste ativo é "${selectedAccount.name}".`
+                : 'Vincular a uma conta faz o valor do ativo entrar no saldo dela.'}
+            </p>
           </div>
 
-          {isFixed && (
+          {!form.accountId && (
+            <div>
+              <label className="label" htmlFor="investment-broker">
+                Corretora
+              </label>
+              <input
+                id="investment-broker"
+                className="input"
+                value={form.broker}
+                onChange={(e) => setForm({ ...form, broker: e.target.value })}
+                placeholder="Ex: XP"
+              />
+            </div>
+          )}
+
+          {isTreasury && (
+            <>
+              <TreasuryPicker
+                value={form.ticker}
+                disabled={isEdit}
+                onSelect={(title) => {
+                  setSelectedTreasury(title);
+                  setForm((f) => ({
+                    ...f,
+                    ticker: title.ticker,
+                    name: title.name,
+                    // Indexador e vencimento passam a vir do título escolhido, não da digitação.
+                    indexer: (title.indexer || '').toUpperCase().replace('PREFIXADO', 'PRE'),
+                    maturityDate: title.maturityDate || '',
+                  }));
+                }}
+              />
+              {selectedTreasury && <TreasuryReference quote={selectedTreasury} />}
+            </>
+          )}
+
+          {isFixed && !isTreasury && (
             <>
               <div className="grid grid-cols-2 gap-4">
                 <div>
@@ -225,34 +329,34 @@ export default function InvestmentFormModal({ isOpen, onClose, onSave, investmen
                     {INDEXERS.map((i) => <option key={i.value} value={i.value}>{i.label}</option>)}
                   </select>
                 </div>
-                <div>
-                  <label className="label">Taxa contratada (%) <span className="text-red-400">*</span></label>
-                  <input
-                    className="input"
-                    type="number"
-                    step="0.01"
-                    value={form.interestRate}
-                    onChange={(e) => setForm({ ...form, interestRate: e.target.value })}
-                    placeholder={form.indexer === 'IPCA' ? 'Ex: 7.10  →  IPCA+7,10' : form.indexer === 'CDI' ? 'Ex: 110' : 'Ex: 12.5'}
-                    required
-                  />
-                  {form.assetType === 'TESOURO_DIRETO' && (
-                    <p className="mt-1 text-[11px] text-gray-500 dark:text-gray-400">
-                      Taxa da compra. Novos aportes ficam no histórico com a taxa daquele momento.
-                    </p>
-                  )}
-                </div>
+                {!isTreasury && (
+                  <div>
+                    <label className="label">Taxa contratada (%) <span className="text-red-400">*</span></label>
+                    <input
+                      className="input"
+                      type="number"
+                      step="0.01"
+                      value={form.interestRate}
+                      onChange={(e) => setForm({ ...form, interestRate: e.target.value })}
+                      placeholder={form.indexer === 'CDI' ? 'Ex: 110  →  110% do CDI' : 'Ex: 12.5'}
+                      required
+                    />
+                  </div>
+                )}
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="label">Vencimento <span className="text-red-400">*</span></label>
                   <input className="input" type="date" value={form.maturityDate} onChange={(e) => setForm({ ...form, maturityDate: e.target.value })} required />
                 </div>
-                <div>
-                  <label className="label">Liquidez (dias)</label>
-                  <input className="input" type="number" min="0" value={form.liquidityDays} onChange={(e) => setForm({ ...form, liquidityDays: e.target.value })} placeholder="Ex: 0" />
-                </div>
+                {!isTreasury && (
+                  <div>
+                    <label className="label">Liquidez (dias)</label>
+                    <input className="input" type="number" min="0" value={form.liquidityDays} onChange={(e) => setForm({ ...form, liquidityDays: e.target.value })} placeholder="Ex: 0" />
+                  </div>
+                )}
               </div>
+
             </>
           )}
 

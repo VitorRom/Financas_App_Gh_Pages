@@ -1,6 +1,9 @@
 import { useState, useEffect } from 'react';
 import { Plus, Pencil, Trash2, X, Wallet, CreditCard, Banknote, PiggyBank, TrendingUp } from 'lucide-react';
 import { accountsAPI } from '../services/api.js';
+import { useToast } from '../context/ToastContext.jsx';
+import { useConfirm } from '../context/ConfirmContext.jsx';
+import { ErrorState, LoadingState } from '../components/ui/StateMessage.jsx';
 
 const accountTypes = [
   { value: 'checking', label: 'Conta Corrente', icon: Banknote, color: '#10b981' },
@@ -11,6 +14,9 @@ const accountTypes = [
 ];
 
 export default function Accounts() {
+  const toast = useToast();
+  const confirm = useConfirm();
+  const [loadError, setLoadError] = useState(null);
   const [accounts, setAccounts] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
@@ -28,11 +34,12 @@ export default function Accounts() {
   }, []);
 
   async function loadAccounts() {
+    setLoadError(null);
     try {
       const data = await accountsAPI.getAll();
       setAccounts(data);
     } catch (error) {
-      console.error('Error loading accounts:', error);
+      setLoadError(error.message);
     } finally {
       setLoading(false);
     }
@@ -53,20 +60,27 @@ export default function Accounts() {
       }
       closeModal();
       loadAccounts();
+      toast.success(editingAccount ? 'Conta atualizada.' : 'Conta criada.');
     } catch (error) {
-      console.error('Error saving account:', error);
-      alert('Erro ao salvar conta');
+      toast.error(error.message, { title: 'Não foi possível salvar' });
     }
   }
 
-  async function handleDelete(id) {
-    if (!confirm('Deseja realmente excluir esta conta?')) return;
+  async function handleDelete(account) {
+    const ok = await confirm({
+      title: 'Excluir conta?',
+      message: `"${account.name}" será removida permanentemente.`,
+      confirmLabel: 'Excluir',
+    });
+    if (!ok) return;
+
     try {
-      await accountsAPI.delete(id);
+      await accountsAPI.delete(account.id);
       loadAccounts();
+      toast.success('Conta excluída.');
     } catch (error) {
-      console.error('Error deleting account:', error);
-      alert('Erro ao excluir conta');
+      // O backend recusa contas com transações vinculadas e explica o porquê.
+      toast.error(error.message, { title: 'Não foi possível excluir' });
     }
   }
 
@@ -129,10 +143,17 @@ export default function Accounts() {
 
   const investmentCount = accounts.filter((a) => a.type === 'investment').length;
 
-  if (loading) {
+  // Contas de investimento têm `balance = 0`; o valor delas vem das posições.
+  const investedTotal = accounts
+    .filter((a) => a.type === 'investment')
+    .reduce((sum, a) => sum + (a.investedValue || 0), 0);
+
+  if (loading) return <LoadingState label="Carregando contas…" />;
+
+  if (loadError) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <div className="text-gray-500">Carregando...</div>
+      <div className="pt-6">
+        <ErrorState message={loadError} onRetry={loadAccounts} />
       </div>
     );
   }
@@ -149,12 +170,20 @@ export default function Accounts() {
 
       {/* Total Balance Card */}
       <div className="card bg-gradient-to-r from-primary-600 to-primary-700 text-white">
-        <p className="text-sm opacity-80">Saldo Total (contas correntes)</p>
+        <p className="text-sm opacity-80">Saldo em conta</p>
         <p className="text-3xl font-bold mt-1">{formatCurrency(totalBalance)}</p>
-        <p className="text-sm opacity-80 mt-2">
-          {accounts.length} contas
+        {investedTotal > 0 && (
+          <p className="text-sm opacity-90 mt-2">
+            + {formatCurrency(investedTotal)} investido ={' '}
+            <span className="font-semibold">{formatCurrency(totalBalance + investedTotal)}</span> no total
+          </p>
+        )}
+        <p className="text-sm opacity-80 mt-1">
+          {accounts.length} {accounts.length === 1 ? 'conta' : 'contas'}
           {investmentCount > 0 && (
-            <span className="ml-1">• {investmentCount} de investimento (não somadas)</span>
+            <span className="ml-1">
+              • {investmentCount} de investimento
+            </span>
           )}
         </p>
       </div>
@@ -196,7 +225,7 @@ export default function Accounts() {
                       <Pencil size={16} />
                     </button>
                     <button
-                      onClick={() => handleDelete(account.id)}
+                      onClick={() => handleDelete(account)}
                       className="p-2 text-gray-400 hover:text-red-600"
                     >
                       <Trash2 size={16} />
@@ -206,11 +235,11 @@ export default function Accounts() {
                 <div className="mt-4">
                   {isInvestment ? (
                     <>
-                      <p className="text-lg font-semibold italic text-gray-500 dark:text-gray-400">
-                        Saldo derivado
+                      <p className="text-2xl font-bold text-violet-700 dark:text-violet-300">
+                        {formatCurrency(account.investedValue || 0)}
                       </p>
                       <p className="text-xs text-gray-400 dark:text-gray-500 mt-1">
-                        Calculado a partir das posições na aba Investimentos
+                        Das posições na aba Investimentos
                       </p>
                     </>
                   ) : (

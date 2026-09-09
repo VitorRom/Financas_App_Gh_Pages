@@ -74,8 +74,14 @@ export async function create(userId, data) {
 
   if (['RENDA_FIXA', 'TESOURO_DIRETO'].includes(assetType)) {
     if (!indexer) throw new AppError('Indexador é obrigatório para renda fixa', 400);
-    if (interestRate === undefined || interestRate === null) throw new AppError('Taxa é obrigatória para renda fixa', 400);
     if (!maturityDate) throw new AppError('Data de vencimento é obrigatória para renda fixa', 400);
+  }
+
+  // Tesouro Direto não pede taxa no cadastro: a taxa que importa é a travada em cada
+  // compra, informada no aporte, e a média ponderada delas passa a ser a taxa do ativo.
+  // A taxa de mercado do momento é só referência, e vem da API.
+  if (assetType === 'RENDA_FIXA' && (interestRate === undefined || interestRate === null)) {
+    throw new AppError('Taxa é obrigatória para renda fixa', 400);
   }
 
   // Se vinculado a uma conta de investimento e broker não foi informado,
@@ -112,7 +118,9 @@ export async function create(userId, data) {
     indexer: indexer || null,
     interestRate: interestRate != null ? parseFloat(interestRate) : null,
     maturityDate: maturityDate ? new Date(maturityDate) : null,
-    liquidityDays: liquidityDays != null ? parseInt(liquidityDays) : null,
+    // Tesouro Direto tem liquidez diária garantida pelo Tesouro Nacional (D+1);
+    // o campo só faz sentido para CDB, LCI e afins, com carência contratada.
+    liquidityDays: assetType === 'TESOURO_DIRETO' ? null : liquidityDays != null ? parseInt(liquidityDays) : null,
     purchaseDate: new Date(purchaseDate),
     notes: notes || null,
     userId,
@@ -136,20 +144,24 @@ export async function update(userId, id, data) {
   const existing = await repo.findById(id, userId);
   if (!existing) throw new AppError('Investimento não encontrado', 404);
 
-  // Se accountId mudou para uma conta de investimento e broker não foi informado,
-  // sincroniza broker com o nome da nova conta
-  let resolvedBroker = data.broker;
-  if (data.broker === undefined || data.broker === null || data.broker === '') {
+  // Corretora: só é recalculada quando o campo veio na requisição. Uma edição
+  // parcial (só as notas, por exemplo) precisa preservar o que já estava gravado.
+  let resolvedBroker;
+  const brokerWasSent = data.broker !== undefined;
+  const brokerIsBlank = data.broker === null || data.broker === '';
+
+  if (brokerWasSent && !brokerIsBlank) {
+    resolvedBroker = data.broker;
+  } else if (brokerWasSent || data.accountId !== undefined) {
+    // Campo enviado em branco, ou conta vinculada mudou: herda o nome da conta
+    // de investimento quando houver uma.
     const accountIdToCheck = data.accountId !== undefined ? data.accountId : existing.accountId;
+    resolvedBroker = null;
     if (accountIdToCheck) {
       const account = await accountsRepo.findById(accountIdToCheck, userId);
       if (account && account.type === 'investment') {
         resolvedBroker = account.name;
-      } else {
-        resolvedBroker = null;
       }
-    } else {
-      resolvedBroker = null;
     }
   }
 
@@ -157,7 +169,7 @@ export async function update(userId, id, data) {
   if (data.assetType !== undefined) updateData.assetType = data.assetType;
   if (data.ticker !== undefined) updateData.ticker = data.ticker || null;
   if (data.name !== undefined) updateData.name = data.name;
-  updateData.broker = resolvedBroker;
+  if (resolvedBroker !== undefined) updateData.broker = resolvedBroker;
   if (data.accountId !== undefined) updateData.accountId = data.accountId || null;
   if (data.indexer !== undefined) updateData.indexer = data.indexer || null;
   if (data.interestRate !== undefined) updateData.interestRate = data.interestRate != null ? parseFloat(data.interestRate) : null;
@@ -343,13 +355,15 @@ export async function getSummary(userId) {
 
 export async function getEvolution(userId, months) {
   const now = new Date();
-  const startDate = new Date(now.getFullYear(), now.getMonth() - months, 1);
+  // `months` períodos contando o mês atual — o laço antigo ia de 0 a months
+  // inclusive e devolvia 13 meses para um pedido de 12, sendo o primeiro parcial.
+  const startDate = new Date(now.getFullYear(), now.getMonth() - (months - 1), 1);
 
   const transactions = await repo.findTransactionsByUser(userId, { dateGte: startDate });
 
   const monthlyData = {};
-  for (let i = 0; i <= months; i++) {
-    const d = new Date(now.getFullYear(), now.getMonth() - months + i, 1);
+  for (let i = 0; i < months; i++) {
+    const d = new Date(now.getFullYear(), now.getMonth() - (months - 1) + i, 1);
     const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
     monthlyData[key] = { aportes: 0, resgates: 0, proventos: 0 };
   }

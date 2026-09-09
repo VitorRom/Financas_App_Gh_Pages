@@ -3,7 +3,7 @@ import { z } from 'zod';
 export const createTransactionSchema = z.object({
   description: z.string().min(1, 'Descrição é obrigatória'),
   amount: z.coerce.number().positive('Valor deve ser positivo'),
-  type: z.enum(['income', 'expense'], { required_error: 'Tipo inválido' }),
+  type: z.enum(['income', 'expense'], { error: 'Tipo deve ser "income" ou "expense"' }),
   date: z.coerce.date().optional(),
   categoryId: z.string().uuid().nullable().optional(),
   accountId: z.string().uuid().nullable().optional(),

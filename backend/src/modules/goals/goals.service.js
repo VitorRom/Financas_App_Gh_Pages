@@ -8,6 +8,24 @@ function pmtFromFutureValue({ targetFinalValue, monthlyRatePct, months }) {
   return (targetFinalValue * r) / (Math.pow(1 + r, months) - 1);
 }
 
+/**
+ * Soma meses preservando o mês de destino.
+ * `new Date(ano, mês + n, 31)` transborda para o mês seguinte quando o mês de
+ * destino é mais curto — uma meta iniciada em 31/01 pularia fevereiro inteiro.
+ * Aqui o dia é limitado ao último dia do mês de destino.
+ */
+function addMonthsClamped(date, months) {
+  const target = new Date(date.getFullYear(), date.getMonth() + months, 1);
+  const lastDayOfTargetMonth = new Date(target.getFullYear(), target.getMonth() + 1, 0).getDate();
+  target.setDate(Math.min(date.getDate(), lastDayOfTargetMonth));
+  return target;
+}
+
+/** "janeiro de 2025" — com o ano, para não repetir o mesmo rótulo a cada 12 parcelas. */
+function formatMonthLabel(date) {
+  return date.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
+}
+
 function buildInstallments({ startDate, years, monthlyRatePct, monthlyContribution }) {
   const months = years * 12;
   const r = monthlyRatePct / 100;
@@ -16,7 +34,7 @@ function buildInstallments({ startDate, years, monthlyRatePct, monthlyContributi
   let balance = 0;
 
   for (let i = 0; i < months; i++) {
-    const paymentDate = new Date(startDate.getFullYear(), startDate.getMonth() + i, startDate.getDate());
+    const paymentDate = addMonthsClamped(startDate, i);
     const interest = balance * r;
     invested += monthlyContribution;
     balance = balance + interest + monthlyContribution;
@@ -24,7 +42,7 @@ function buildInstallments({ startDate, years, monthlyRatePct, monthlyContributi
     rows.push({
       monthIndex: i + 1,
       paymentDate,
-      monthLabel: paymentDate.toLocaleDateString('pt-BR', { month: 'long' }),
+      monthLabel: formatMonthLabel(paymentDate),
       contribution: monthlyContribution,
       ratePct: monthlyRatePct,
       investedTotal: invested,

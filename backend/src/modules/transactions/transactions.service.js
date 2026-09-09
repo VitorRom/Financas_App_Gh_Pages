@@ -1,5 +1,23 @@
 import { AppError } from '../../shared/utils/errors.js';
+import { assertWithinPlanLimit } from '../../shared/utils/planLimits.js';
 import * as repo from './transactions.repository.js';
+
+/**
+ * Garante que a conta e a categoria informadas pertencem a quem está autenticado.
+ * Sem isso, o corpo da requisição poderia apontar para recursos de outro usuário —
+ * e o ajuste de saldo alteraria a conta alheia.
+ */
+async function assertOwnsRelations(userId, { accountId, categoryId }) {
+  if (accountId) {
+    const account = await repo.findAccountForUser(accountId, userId);
+    if (!account) throw new AppError('Conta não encontrada', 404);
+  }
+
+  if (categoryId) {
+    const category = await repo.findCategoryForUser(categoryId, userId);
+    if (!category) throw new AppError('Categoria não encontrada', 404);
+  }
+}
 
 export function list(userId, filters) {
   return repo.findAll(userId, filters);
@@ -12,7 +30,15 @@ export async function findById(userId, id) {
 }
 
 export async function create(userId, data) {
-  const tx = await repo.create({
+  await assertOwnsRelations(userId, data);
+  await assertWithinPlanLimit(
+    userId,
+    'maxTransactions',
+    () => repo.countByUser(userId),
+    'transações',
+  );
+
+  return repo.createWithBalance({
     description: data.description,
     amount: data.amount,
     type: data.type,
@@ -22,52 +48,32 @@ export async function create(userId, data) {
     notes: data.notes,
     userId,
   });
-
-  if (tx.accountId) {
-    const delta = tx.type === 'income' ? Number(tx.amount) : -Number(tx.amount);
-    await repo.adjustAccountBalance(tx.accountId, delta);
-  }
-
-  return tx;
 }
 
 export async function update(userId, id, data) {
-  const old = await repo.findById(id, userId);
-  if (!old) throw new AppError('Transação não encontrada', 404);
+  const previous = await repo.findById(id, userId);
+  if (!previous) throw new AppError('Transação não encontrada', 404);
 
-  const tx = await repo.update(id, {
-    description: data.description,
-    amount: data.amount !== undefined ? data.amount : undefined,
-    type: data.type,
-    date: data.date,
-    categoryId: data.categoryId !== undefined ? (data.categoryId ?? null) : undefined,
-    accountId: data.accountId !== undefined ? (data.accountId ?? null) : undefined,
-    notes: data.notes,
-  });
+  await assertOwnsRelations(userId, data);
 
-  // Revert old balance effect
-  if (old.accountId) {
-    const revert = old.type === 'income' ? -Number(old.amount) : Number(old.amount);
-    await repo.adjustAccountBalance(old.accountId, revert);
-  }
-
-  // Apply new balance effect
-  if (tx.accountId) {
-    const delta = tx.type === 'income' ? Number(tx.amount) : -Number(tx.amount);
-    await repo.adjustAccountBalance(tx.accountId, delta);
-  }
-
-  return tx;
+  return repo.updateWithBalance(
+    id,
+    {
+      description: data.description,
+      amount: data.amount !== undefined ? data.amount : undefined,
+      type: data.type,
+      date: data.date,
+      categoryId: data.categoryId !== undefined ? (data.categoryId ?? null) : undefined,
+      accountId: data.accountId !== undefined ? (data.accountId ?? null) : undefined,
+      notes: data.notes,
+    },
+    previous,
+  );
 }
 
 export async function remove(userId, id) {
-  const tx = await repo.findById(id, userId);
-  if (!tx) throw new AppError('Transação não encontrada', 404);
+  const previous = await repo.findById(id, userId);
+  if (!previous) throw new AppError('Transação não encontrada', 404);
 
-  if (tx.accountId) {
-    const revert = tx.type === 'income' ? -Number(tx.amount) : Number(tx.amount);
-    await repo.adjustAccountBalance(tx.accountId, revert);
-  }
-
-  return repo.remove(id);
+  return repo.removeWithBalance(previous);
 }

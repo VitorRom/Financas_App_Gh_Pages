@@ -9,5 +9,5 @@ export const createGoalSchema = z.object({
 });
 
 export const updateInstallmentSchema = z.object({
-  status: z.enum(['Pendente', 'Ok'], { required_error: 'Status inválido' }),
+  status: z.enum(['Pendente', 'Ok'], { error: 'Status deve ser "Pendente" ou "Ok"' }),
 });

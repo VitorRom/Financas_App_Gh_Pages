@@ -1,8 +1,14 @@
 import { useState, useEffect } from 'react';
 import { Plus, Pencil, Trash2, X, TrendingUp, TrendingDown } from 'lucide-react';
 import { categoriesAPI } from '../services/api.js';
+import { useToast } from '../context/ToastContext.jsx';
+import { useConfirm } from '../context/ConfirmContext.jsx';
+import { ErrorState, LoadingState } from '../components/ui/StateMessage.jsx';
 
 export default function Categories() {
+  const toast = useToast();
+  const confirm = useConfirm();
+  const [loadError, setLoadError] = useState(null);
   const [categories, setCategories] = useState([]);
   const [loading, setLoading] = useState(true);
   const [showModal, setShowModal] = useState(false);
@@ -21,11 +27,12 @@ export default function Categories() {
   }, []);
 
   async function loadCategories() {
+    setLoadError(null);
     try {
       const data = await categoriesAPI.getAll();
       setCategories(data);
     } catch (error) {
-      console.error('Error loading categories:', error);
+      setLoadError(error.message);
     } finally {
       setLoading(false);
     }
@@ -41,20 +48,26 @@ export default function Categories() {
       }
       closeModal();
       loadCategories();
+      toast.success(editingCategory ? 'Categoria atualizada.' : 'Categoria criada.');
     } catch (error) {
-      console.error('Error saving category:', error);
-      alert('Erro ao salvar categoria');
+      toast.error(error.message, { title: 'Não foi possível salvar' });
     }
   }
 
-  async function handleDelete(id) {
-    if (!confirm('Deseja realmente excluir esta categoria?')) return;
+  async function handleDelete(category) {
+    const ok = await confirm({
+      title: 'Excluir categoria?',
+      message: `"${category.name}" será removida. As transações dela ficam sem categoria.`,
+      confirmLabel: 'Excluir',
+    });
+    if (!ok) return;
+
     try {
-      await categoriesAPI.delete(id);
+      await categoriesAPI.delete(category.id);
       loadCategories();
+      toast.success('Categoria excluída.');
     } catch (error) {
-      console.error('Error deleting category:', error);
-      alert('Erro ao excluir categoria');
+      toast.error(error.message, { title: 'Não foi possível excluir' });
     }
   }
 
@@ -91,10 +104,12 @@ export default function Categories() {
   const incomeCategories = filteredCategories.filter((c) => c.type === 'income');
   const expenseCategories = filteredCategories.filter((c) => c.type === 'expense');
 
-  if (loading) {
+  if (loading) return <LoadingState label="Carregando categorias…" />;
+
+  if (loadError) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <div className="text-gray-500">Carregando...</div>
+      <div className="pt-6">
+        <ErrorState message={loadError} onRetry={loadCategories} />
       </div>
     );
   }
@@ -142,7 +157,7 @@ export default function Categories() {
                     key={category.id}
                     category={category}
                     onEdit={() => openModal(category)}
-                    onDelete={() => handleDelete(category.id)}
+                    onDelete={() => handleDelete(category)}
                   />
                 ))
               ) : (
@@ -166,7 +181,7 @@ export default function Categories() {
                     key={category.id}
                     category={category}
                     onEdit={() => openModal(category)}
-                    onDelete={() => handleDelete(category.id)}
+                    onDelete={() => handleDelete(category)}
                   />
                 ))
               ) : (

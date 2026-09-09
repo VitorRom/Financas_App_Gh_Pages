@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Link } from 'react-router-dom';
 import {
   TrendingUp,
@@ -12,9 +12,49 @@ import {
   AlertTriangle,
   CheckCircle,
 } from 'lucide-react';
-import { dashboardAPI, transactionsAPI, goalsAPI, investmentsAPI } from '../services/api.js';
+import { dashboardAPI, transactionsAPI, goalsAPI, investmentsAPI, accountsAPI } from '../services/api.js';
+import { ErrorState, LoadingState } from '../components/ui/StateMessage.jsx';
+import FirstStepsCard from '../components/onboarding/FirstStepsCard.jsx';
+import {
+  firstStepsDismissed,
+  dismissFirstSteps,
+} from '../components/onboarding/firstStepsStorage.js';
 import { format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
+
+/**
+ * O resumo é sempre pedido com um intervalo explícito. Antes a chamada ia sem
+ * filtro nenhum e a tela rotulava o total histórico como "Este mês".
+ */
+const PERIODS = {
+  month: {
+    label: 'Este mês',
+    short: 'no mês',
+    range: () => {
+      const now = new Date();
+      return {
+        startDate: new Date(now.getFullYear(), now.getMonth(), 1).toISOString(),
+        endDate: new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999).toISOString(),
+      };
+    },
+  },
+  year: {
+    label: 'Este ano',
+    short: 'no ano',
+    range: () => {
+      const now = new Date();
+      return {
+        startDate: new Date(now.getFullYear(), 0, 1).toISOString(),
+        endDate: new Date(now.getFullYear(), 11, 31, 23, 59, 59, 999).toISOString(),
+      };
+    },
+  },
+  all: {
+    label: 'Tudo',
+    short: 'no total',
+    range: () => ({ period: 'all' }),
+  },
+};
 
 function formatCurrency(value) {
   return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value);
@@ -84,11 +124,6 @@ function GoalCard({ goal }) {
   const pct = total > 0 ? Math.round((paid / total) * 100) : 0;
   const remaining = total - paid;
 
-  // Find next pending installment
-  const nextInstallment = schedule.find(
-    (r) => r.status !== 'Ok' && r.status !== 'OK' && r.status !== 'Pago'
-  );
-
   return (
     <div className="rounded-xl border border-gray-100 dark:border-gray-700 bg-white dark:bg-gray-800/60 p-4 hover:shadow-md transition-shadow">
       <div className="flex items-start justify-between gap-3 mb-3">
@@ -152,35 +187,44 @@ export default function Dashboard() {
   const [goals, setGoals] = useState([]);
   const [investmentSummary, setInvestmentSummary] = useState(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  const [periodKey, setPeriodKey] = useState('month');
+  const [accountCount, setAccountCount] = useState(0);
+  const [hideFirstSteps, setHideFirstSteps] = useState(() => firstStepsDismissed());
 
-  useEffect(() => {
-    loadData();
-  }, []);
-
-  async function loadData() {
+  const loadData = useCallback(async () => {
+    setLoading(true);
+    setError(null);
     try {
-      const [summaryData, transactions, goalsData, invSummary] = await Promise.all([
-        dashboardAPI.getSummary(),
-        transactionsAPI.getAll(),
+      const [summaryData, transactions, goalsData, accounts, invSummary] = await Promise.all([
+        dashboardAPI.getSummary(PERIODS[periodKey].range()),
+        transactionsAPI.getAll({ limit: 5 }),
         goalsAPI.list(),
+        accountsAPI.getAll(),
         investmentsAPI.getSummary().catch(() => null),
       ]);
       setSummary(summaryData);
-      setRecentTransactions(transactions.slice(0, 5));
+      setRecentTransactions(transactions);
       setGoals(goalsData);
+      setAccountCount(accounts.length);
       setInvestmentSummary(invSummary);
-    } catch (error) {
-      console.error('Error loading data:', error);
+    } catch (err) {
+      setError(err.message);
     } finally {
       setLoading(false);
     }
-  }
+  }, [periodKey]);
 
-  if (loading) {
+  useEffect(() => {
+    loadData();
+  }, [loadData]);
+
+  if (loading) return <LoadingState label="Carregando dashboard…" />;
+
+  if (error) {
     return (
-      <div className="flex flex-col items-center justify-center h-64 gap-3">
-        <div className="h-10 w-10 rounded-full border-2 border-primary-500 border-t-transparent animate-spin" />
-        <p className="text-gray-500 dark:text-gray-400 text-sm">Carregando dashboard…</p>
+      <div className="pt-6">
+        <ErrorState message={error} onRetry={loadData} />
       </div>
     );
   }
@@ -200,18 +244,19 @@ export default function Dashboard() {
 
   const topCategoryTotal = categoryEntries.reduce((s, [, v]) => s + v, 0);
 
-  // Budget health insight
+  // Saúde do orçamento — sempre referente ao período selecionado.
+  const periodShort = PERIODS[periodKey].short;
   let insight = null;
   if (income === 0) {
     insight = { type: 'info', text: 'Adicione uma receita para ver sua saúde financeira.' };
   } else if (savingsRate < 0) {
-    insight = { type: 'danger', text: 'Suas despesas superaram as receitas este mês. Revise os gastos.' };
+    insight = { type: 'danger', text: `Suas despesas superaram as receitas ${periodShort}. Revise os gastos.` };
   } else if (savingsRate < 10) {
-    insight = { type: 'warning', text: `Você está economizando apenas ${savingsRate.toFixed(0)}%. Tente chegar a 20%.` };
+    insight = { type: 'warning', text: `Você está economizando apenas ${savingsRate.toFixed(0)}% ${periodShort}. Tente chegar a 20%.` };
   } else if (savingsRate >= 20) {
-    insight = { type: 'success', text: `Parabéns! Você está economizando ${savingsRate.toFixed(0)}% da sua renda este mês.` };
+    insight = { type: 'success', text: `Parabéns! Você está economizando ${savingsRate.toFixed(0)}% da sua renda ${periodShort}.` };
   } else {
-    insight = { type: 'info', text: `Você economizou ${savingsRate.toFixed(0)}% este mês. Meta sugerida: 20%.` };
+    insight = { type: 'info', text: `Você economizou ${savingsRate.toFixed(0)}% ${periodShort}. Meta sugerida: 20%.` };
   }
 
   const insightStyles = {
@@ -229,14 +274,54 @@ export default function Dashboard() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h2 className="text-2xl font-bold text-gray-900 dark:text-white">
-          Visão Geral
-        </h2>
-        <p className="text-sm text-gray-500 dark:text-gray-400 capitalize">
-          {format(new Date(), "MMMM 'de' yyyy", { locale: ptBR })}
-        </p>
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3">
+        <div>
+          <h2 className="text-2xl font-bold text-gray-900 dark:text-white">Visão Geral</h2>
+          <p className="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
+            {periodKey === 'month' && (
+              <span className="first-letter:uppercase">
+                {format(new Date(), "MMMM 'de' yyyy", { locale: ptBR })}
+              </span>
+            )}
+            {periodKey === 'year' && `Ano de ${new Date().getFullYear()}`}
+            {periodKey === 'all' && 'Todo o histórico'}
+          </p>
+        </div>
+
+        <div
+          className="inline-flex rounded-lg p-1 bg-gray-100 dark:bg-gray-800 ring-1 ring-gray-200 dark:ring-gray-700 w-fit"
+          role="group"
+          aria-label="Período do resumo"
+        >
+          {Object.entries(PERIODS).map(([key, { label }]) => (
+            <button
+              key={key}
+              type="button"
+              onClick={() => setPeriodKey(key)}
+              aria-pressed={periodKey === key}
+              className={`px-3 py-1.5 rounded-md text-sm font-medium transition-colors ${
+                periodKey === key
+                  ? 'bg-white dark:bg-gray-700 text-gray-900 dark:text-white shadow-sm'
+                  : 'text-gray-500 dark:text-gray-400 hover:text-gray-800 dark:hover:text-gray-200'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
       </div>
+
+      {!hideFirstSteps && (
+        <FirstStepsCard
+          hasAccounts={accountCount > 0}
+          hasTransactions={(summary?.transactionCount ?? 0) > 0 || recentTransactions.length > 0}
+          hasGoals={goals.length > 0}
+          onDismiss={() => {
+            dismissFirstSteps();
+            setHideFirstSteps(true);
+          }}
+        />
+      )}
 
       {/* Insight Banner */}
       {insight && (
@@ -260,21 +345,21 @@ export default function Dashboard() {
           value={income}
           icon={TrendingUp}
           color="green"
-          subtitle="Este mês"
+          subtitle={PERIODS[periodKey].label}
         />
         <SummaryCard
           title="Despesas"
           value={expense}
           icon={TrendingDown}
           color="red"
-          subtitle="Este mês"
+          subtitle={PERIODS[periodKey].label}
         />
         <SummaryCard
           title="Economizado"
           value={balance}
           icon={TrendingUp}
           color={balance >= 0 ? 'purple' : 'red'}
-          subtitle={income > 0 ? `${savingsRate.toFixed(0)}% da renda` : 'Este mês'}
+          subtitle={income > 0 ? `${savingsRate.toFixed(0)}% da renda` : PERIODS[periodKey].label}
         />
       </div>
 
@@ -354,7 +439,7 @@ export default function Dashboard() {
         <div className="lg:col-span-2 card space-y-5">
           <h3 className="text-lg font-semibold text-gray-900 dark:text-white flex items-center gap-2">
             <Zap className="w-5 h-5 text-amber-500" />
-            Saúde do Mês
+            {periodKey === 'month' ? 'Saúde do Mês' : 'Saúde do Período'}
           </h3>
 
           {/* Savings Gauge */}

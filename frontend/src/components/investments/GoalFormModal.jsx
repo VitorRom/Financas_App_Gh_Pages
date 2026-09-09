@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { X } from 'lucide-react';
+import { useToast } from '../../context/ToastContext.jsx';
 
 const ASSET_TYPES = [
   'RENDA_FIXA', 'ACAO', 'FII', 'ETF', 'CRIPTO', 'FUNDO', 'TESOURO_DIRETO', 'PREVIDENCIA', 'OUTRO',
@@ -11,6 +12,7 @@ const ASSET_TYPE_LABELS = {
 };
 
 export default function GoalFormModal({ isOpen, onClose, onSave, goal }) {
+  const toast = useToast();
   const isEdit = !!goal;
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState({
@@ -55,7 +57,7 @@ export default function GoalFormModal({ isOpen, onClose, onSave, goal }) {
       await onSave(form);
       onClose();
     } catch (err) {
-      alert(err.message);
+      toast.error(err.message, { title: 'Não foi possível salvar' });
     } finally {
       setSaving(false);
     }

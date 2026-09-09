@@ -11,9 +11,22 @@ import {
   TrendingUp,
 } from 'lucide-react';
 import { goalsAPI } from '../services/api.js';
+import { useToast } from '../context/ToastContext.jsx';
+import { useConfirm } from '../context/ConfirmContext.jsx';
+import { ErrorState, LoadingState } from '../components/ui/StateMessage.jsx';
 
 function formatCurrency(value) {
   return new Intl.NumberFormat('pt-BR', { style: 'currency', currency: 'BRL' }).format(value);
+}
+
+/**
+ * Rótulo do mês derivado da data de pagamento. Vem daqui, e não do `monthLabel`
+ * gravado no banco, para que metas criadas antes da correção também mostrem o ano.
+ */
+function formatMonthLabel(iso) {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' });
 }
 
 function formatPaymentDate(iso) {
@@ -40,6 +53,9 @@ function limitToNumber(key) {
 }
 
 export default function Goals() {
+  const toast = useToast();
+  const confirm = useConfirm();
+  const [loadError, setLoadError] = useState(null);
   const [goals, setGoals] = useState([]);
   const [loading, setLoading] = useState(true);
   const [selectedGoalId, setSelectedGoalId] = useState('');
@@ -57,9 +73,12 @@ export default function Goals() {
   async function load() {
     try {
       setLoading(true);
+      setLoadError(null);
       const data = await goalsAPI.list();
       setGoals(data);
       if (!selectedGoalId && data?.[0]?.id) setSelectedGoalId(data[0].id);
+    } catch (err) {
+      setLoadError(err.message);
     } finally {
       setLoading(false);
     }
@@ -116,8 +135,9 @@ export default function Goals() {
       await load();
       setSelectedGoalId(created.id);
       setForm((f) => ({ ...f, name: '' }));
+      toast.success(`Meta "${created.name}" criada com ${created.years * 12} parcelas.`);
     } catch (err) {
-      alert(err.message);
+      toast.error(err.message, { title: 'Não foi possível criar a meta' });
     }
   }
 
@@ -126,15 +146,26 @@ export default function Goals() {
       await goalsAPI.updateInstallment(row.id, data);
       await load();
     } catch (err) {
-      alert(err.message);
+      toast.error(err.message, { title: 'Não foi possível atualizar a parcela' });
     }
   }
 
-  async function onDelete(goalId) {
-    if (!confirm('Excluir esta meta?')) return;
-    await goalsAPI.delete(goalId);
-    setSelectedGoalId('');
-    load();
+  async function onDelete(goal) {
+    const ok = await confirm({
+      title: 'Excluir meta?',
+      message: `"${goal.name}" e todas as suas parcelas serão removidas.`,
+      confirmLabel: 'Excluir meta',
+    });
+    if (!ok) return;
+
+    try {
+      await goalsAPI.delete(goal.id);
+      setSelectedGoalId('');
+      load();
+      toast.success('Meta excluída.');
+    } catch (err) {
+      toast.error(err.message, { title: 'Não foi possível excluir' });
+    }
   }
 
   function renderTotalRowPendentes() {
@@ -188,11 +219,12 @@ export default function Goals() {
       ? 'bg-amber-50/70 dark:bg-amber-950/25 hover:bg-amber-50 dark:hover:bg-amber-950/35 border-l-4 border-amber-400 dark:border-amber-500'
       : 'bg-emerald-50/70 dark:bg-emerald-950/25 hover:bg-emerald-50 dark:hover:bg-emerald-950/35 border-l-4 border-emerald-500 dark:border-emerald-500';
 
-  if (loading) {
+  if (loading) return <LoadingState label="Carregando metas…" />;
+
+  if (loadError) {
     return (
-      <div className="flex flex-col items-center justify-center h-64 gap-3">
-        <div className="h-10 w-10 rounded-full border-2 border-primary-500 border-t-transparent animate-spin" />
-        <div className="text-gray-500 dark:text-gray-400 text-sm">Carregando metas…</div>
+      <div className="pt-6">
+        <ErrorState message={loadError} onRetry={load} />
       </div>
     );
   }
@@ -265,7 +297,7 @@ export default function Goals() {
               <button
                 type="button"
                 className="btn btn-danger inline-flex items-center justify-center gap-2 shrink-0"
-                onClick={() => onDelete(selectedGoal.id)}
+                onClick={() => onDelete(selectedGoal)}
               >
                 <Trash2 className="w-4 h-4" />
                 Excluir
@@ -426,7 +458,7 @@ export default function Goals() {
                       <tbody className="divide-y divide-gray-100 dark:divide-gray-700/80 bg-white dark:bg-gray-900/50">
                         {displaySlice.head.map((row) => (
                           <tr key={row.id || row.monthIndex} className={`transition-colors ${rowAccentClass}`}>
-                            <td className="p-3.5 capitalize font-medium text-gray-900 dark:text-gray-100">{row.monthLabel}</td>
+                            <td className="p-3.5 first-letter:uppercase font-medium text-gray-900 dark:text-gray-100">{formatMonthLabel(row.paymentDate)}</td>
                             <td className="p-3.5 text-gray-700 dark:text-gray-300 tabular-nums">{formatPaymentDate(row.paymentDate)}</td>
                             <td className="p-3.5 text-right tabular-nums text-gray-900 dark:text-gray-100">{formatCurrency(row.contribution)}</td>
                             <td className="p-3.5 text-right tabular-nums text-gray-600 dark:text-gray-400">{row.ratePct.toFixed(2)}</td>

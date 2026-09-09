@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import { Check } from 'lucide-react';
 import { subscriptionsAPI } from '../services/api.js';
 import { useAuth } from '../context/AuthContext.jsx';
+import { useConfirm } from '../context/ConfirmContext.jsx';
 
 const FEATURE_LABELS = {
   transactions: 'Limite de transações',
@@ -27,6 +28,7 @@ function formatFeatureValue(v) {
 }
 
 export default function Subscription() {
+  const confirm = useConfirm();
   const { user, refreshUser } = useAuth();
   const [plans, setPlans] = useState([]);
   const [loadError, setLoadError] = useState('');
@@ -68,7 +70,13 @@ export default function Subscription() {
   }
 
   async function handleCancel() {
-    if (!window.confirm('Voltar ao plano gratuito? Você perderá recursos dos planos pagos.')) return;
+    const ok = await confirm({
+      title: 'Voltar ao plano gratuito?',
+      message: 'Você perderá os recursos exclusivos dos planos pagos.',
+      confirmLabel: 'Voltar ao gratuito',
+    });
+    if (!ok) return;
+
     setActionError('');
     setActionId('cancel');
     try {

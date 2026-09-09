@@ -1,4 +1,4 @@
-import { TrendingUp, TrendingDown, MoreVertical, RefreshCw } from 'lucide-react';
+import { TrendingUp, TrendingDown, RefreshCw } from 'lucide-react';
 
 const ASSET_TYPE_LABELS = {
   RENDA_FIXA: 'Renda Fixa',

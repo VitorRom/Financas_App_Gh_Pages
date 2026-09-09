@@ -9,13 +9,19 @@ const envSchema = z.object({
   // Lista separada por vírgula de origens permitidas pelo CORS. Vazio = aceita qualquer uma (dev).
   CORS_ORIGIN: z.string().optional(),
   BRAPI_TOKEN: z.string().optional(),
+  // Limites de plano (maxTransactions / maxAccounts). Desligado por padrão —
+  // ver src/shared/utils/planLimits.js.
+  ENFORCE_PLAN_LIMITS: z
+    .string()
+    .optional()
+    .transform((v) => v === 'true'),
 });
 
 const parsed = envSchema.safeParse(process.env);
 
 if (!parsed.success) {
   console.error('Variáveis de ambiente inválidas:');
-  parsed.error.errors.forEach((e) => console.error(` - ${e.path.join('.')}: ${e.message}`));
+  parsed.error.issues.forEach((e) => console.error(` - ${e.path.join('.')}: ${e.message}`));
   process.exit(1);
 }
 

@@ -1,12 +1,32 @@
 import * as repo from './dashboard.repository.js';
 
-export async function getSummary(userId, { startDate, endDate } = {}) {
-  const dateFilter = {};
-  if (startDate) dateFilter.gte = new Date(startDate);
-  if (endDate) dateFilter.lte = new Date(endDate);
+/** Primeiro instante do mês corrente até o último — o padrão do resumo. */
+function currentMonthRange() {
+  const now = new Date();
+  return {
+    gte: new Date(now.getFullYear(), now.getMonth(), 1),
+    lte: new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59, 999),
+  };
+}
+
+export async function getSummary(userId, { startDate, endDate, period } = {}) {
+  // Sem intervalo, o padrão é o mês corrente. Antes o resumo somava todas as
+  // transações já cadastradas, enquanto a interface rotulava o número como
+  // "Este mês" — quanto mais tempo de uso, mais distante da verdade.
+  let dateFilter = null;
+
+  if (period === 'all') {
+    dateFilter = null;
+  } else if (startDate || endDate) {
+    dateFilter = {};
+    if (startDate) dateFilter.gte = new Date(startDate);
+    if (endDate) dateFilter.lte = new Date(endDate);
+  } else {
+    dateFilter = currentMonthRange();
+  }
 
   const [transactions, accounts] = await Promise.all([
-    repo.getTransactions(userId, Object.keys(dateFilter).length ? dateFilter : null),
+    repo.getTransactions(userId, dateFilter),
     repo.getAccounts(userId),
   ]);
 
@@ -42,6 +62,10 @@ export async function getSummary(userId, { startDate, endDate } = {}) {
     expensesByCategory,
     transactionCount: transactions.length,
     internalTransferCount: transactions.length - nonInternal.length,
+    // O cliente precisa saber a que período os números se referem para rotulá-los.
+    period: dateFilter
+      ? { start: dateFilter.gte?.toISOString() ?? null, end: dateFilter.lte?.toISOString() ?? null }
+      : null,
   };
 }
 

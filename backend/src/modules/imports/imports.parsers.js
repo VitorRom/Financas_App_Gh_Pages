@@ -45,11 +45,25 @@ export function inferBankByFilename(fileName) {
   return null;
 }
 
+/** Linha iniciada por data: deveria ser um lançamento. Serve para detectar descartes. */
+const LOOKS_LIKE_ENTRY = /^\d{2}\/\d{2}\/\d{4}\s+\S/;
+
 export function parseItauPdf(text) {
   const transactions = [];
+  // Linhas com cara de lançamento que o regex não reconheceu. Sem esse contador
+  // elas sumiriam em silêncio e o resumo da importação mentiria sobre o total lido.
+  transactions.unrecognized = 0;
+
   for (const line of text.split('\n').map((l) => l.trim()).filter(Boolean)) {
-    const match = line.match(/^(\d{2}\/\d{2}\/\d{4})\s+(.+?)\s+([+-]?\d{1,3}(?:\.\d{3})*,\d{2})$/);
-    if (!match) continue;
+    // `−` (U+2212) além do hífen ASCII: PDFs usam o menos tipográfico com frequência,
+    // e o parser do PicPay já o aceitava.
+    const match = line.match(/^(\d{2}\/\d{2}\/\d{4})\s+(.+?)\s+([+\-−]?\d{1,3}(?:\.\d{3})*,\d{2})$/);
+    if (!match) {
+      if (LOOKS_LIKE_ENTRY.test(line) && !line.toUpperCase().includes('SALDO')) {
+        transactions.unrecognized += 1;
+      }
+      continue;
+    }
     const [, dateStr, rawDescription, amountText] = match;
     const description = cleanDescription(rawDescription);
     if (description.toUpperCase().includes('SALDO DO DIA')) continue;

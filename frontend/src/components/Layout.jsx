@@ -13,11 +13,15 @@ import {
   CreditCard,
   TrendingUp,
 } from 'lucide-react';
-import { useState, useEffect } from 'react';
+import { useState, useEffect, lazy, Suspense } from 'react';
 import { useAuth } from '../context/AuthContext.jsx';
 
+// Carregado sob demanda: só quem ainda não viu a apresentação baixa esse pedaço.
+const WelcomeTour = lazy(() => import('./onboarding/WelcomeTour.jsx'));
+
+
 export default function Layout() {
-  const { user, logout } = useAuth();
+  const { user, logout, completeOnboarding } = useAuth();
   const navigate = useNavigate();
   const [darkMode, setDarkMode] = useState(false);
 
@@ -98,6 +102,13 @@ export default function Layout() {
           </div>
         </div>
       </header>
+
+      {/* Apresentação de primeiro uso — só para quem ainda não viu. */}
+      {user && !user.onboardingCompletedAt && (
+        <Suspense fallback={null}>
+          <WelcomeTour onFinish={completeOnboarding} />
+        </Suspense>
+      )}
 
       {/* Main content */}
       <main className="max-w-7xl mx-auto px-4 py-6 pb-24">

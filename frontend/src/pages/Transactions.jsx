@@ -1,10 +1,16 @@
 import { useState, useEffect } from 'react';
-import { Plus, Search, Filter, ArrowUpRight, ArrowDownRight, Pencil, Trash2, X, Upload } from 'lucide-react';
+import { Plus, Search, ArrowUpRight, ArrowDownRight, Pencil, Trash2, X, Upload } from 'lucide-react';
 import { transactionsAPI, categoriesAPI, accountsAPI, importsAPI, rulesAPI, maintenanceAPI, importBatchesAPI } from '../services/api.js';
+import { useToast } from '../context/ToastContext.jsx';
+import { useConfirm } from '../context/ConfirmContext.jsx';
+import { ErrorState, LoadingState } from '../components/ui/StateMessage.jsx';
 import { format } from 'date-fns';
 import { ptBR } from 'date-fns/locale';
 
 export default function Transactions() {
+  const toast = useToast();
+  const confirm = useConfirm();
+  const [loadError, setLoadError] = useState(null);
   const [transactions, setTransactions] = useState([]);
   const [categories, setCategories] = useState([]);
   const [accounts, setAccounts] = useState([]);
@@ -47,6 +53,7 @@ export default function Transactions() {
   }, [filters.excludeInternal]);
 
   async function loadData() {
+    setLoadError(null);
     try {
       const [transData, catData, accData] = await Promise.all([
         transactionsAPI.getAll({ excludeInternal: filters.excludeInternal ? 'true' : 'false' }),
@@ -57,7 +64,7 @@ export default function Transactions() {
       setCategories(catData);
       setAccounts(accData);
     } catch (error) {
-      console.error('Error loading data:', error);
+      setLoadError(error.message);
     } finally {
       setLoading(false);
     }
@@ -87,31 +94,37 @@ export default function Transactions() {
       }
       closeModal();
       loadData();
+      toast.success(editingTransaction ? 'Transação atualizada.' : 'Transação criada.');
     } catch (error) {
-      console.error('Error saving transaction:', error);
-      alert('Erro ao salvar transação');
+      toast.error(error.message, { title: 'Não foi possível salvar' });
     }
   }
 
-  async function handleDelete(id) {
-    if (!confirm('Deseja realmente excluir esta transação?')) return;
+  async function handleDelete(transaction) {
+    const ok = await confirm({
+      title: 'Excluir transação?',
+      message: `"${transaction.description}" será removida e o saldo da conta será ajustado.`,
+      confirmLabel: 'Excluir',
+    });
+    if (!ok) return;
+
     try {
-      await transactionsAPI.delete(id);
+      await transactionsAPI.delete(transaction.id);
       loadData();
+      toast.success('Transação excluída.');
     } catch (error) {
-      console.error('Error deleting transaction:', error);
-      alert('Erro ao excluir transação');
+      toast.error(error.message, { title: 'Não foi possível excluir' });
     }
   }
 
   async function handleImportSubmit(e) {
     e.preventDefault();
     if (!importFile) {
-      alert('Selecione um arquivo para importar');
+      toast.warning('Selecione um arquivo para importar.');
       return;
     }
     if (!importAccountId) {
-      alert('Selecione uma conta para vincular as transações');
+      toast.warning('Selecione a conta que receberá as transações.');
       return;
     }
 
@@ -122,17 +135,26 @@ export default function Transactions() {
         accountId: importAccountId,
       });
 
-      alert(
-        `Importação concluída.\nImportadas: ${result.imported}\nLidas: ${result.parsed}\nIgnoradas (duplicadas): ${result.skipped}`,
-      );
+      const linhas = [
+        `${result.imported} de ${result.parsed} lançamentos importados.`,
+        result.skipped > 0 ? `${result.skipped} ignorados por já existirem.` : null,
+        result.unrecognized > 0
+          ? `${result.unrecognized} linha(s) não foram reconhecidas e ficaram de fora.`
+          : null,
+      ].filter(Boolean);
+
+      if (result.unrecognized > 0) {
+        toast.warning(linhas.join('\n'), { title: 'Importação concluída com ressalvas', duration: 12000 });
+      } else {
+        toast.success(linhas.join('\n'), { title: 'Importação concluída' });
+      }
 
       setShowImportModal(false);
       setImportFile(null);
       setImportAccountId('');
       loadData();
     } catch (error) {
-      console.error('Error importing statement:', error);
-      alert(`Erro ao importar extrato: ${error.message}`);
+      toast.error(error.message, { title: 'Falha ao importar extrato' });
     } finally {
       setImporting(false);
     }
@@ -140,7 +162,14 @@ export default function Transactions() {
 
   async function handlePurgeSubmit(e) {
     e.preventDefault();
-    if (!confirm('Tem certeza? Essa ação apaga transações e não pode ser desfeita.')) return;
+    const ok = await confirm({
+      title: 'Apagar transações do período?',
+      message:
+        'As transações do período escolhido serão removidas e os saldos recalculados a partir do saldo de abertura das contas. Não dá para desfazer.',
+      confirmLabel: 'Apagar',
+    });
+    if (!ok) return;
+
     try {
       setPurging(true);
       const result = await maintenanceAPI.purge({
@@ -148,12 +177,13 @@ export default function Transactions() {
         startDate: purgeRange === 'custom' ? purgeStart : undefined,
         endDate: purgeRange === 'custom' ? purgeEnd : undefined,
       });
-      alert(`Dados apagados: ${result.deleted}`);
+      toast.success(
+        result.deleted === 1 ? '1 transação apagada.' : `${result.deleted} transações apagadas.`,
+      );
       setShowPurgeModal(false);
       loadData();
     } catch (error) {
-      console.error('Error purging data:', error);
-      alert(`Erro ao apagar dados: ${error.message}`);
+      toast.error(error.message, { title: 'Não foi possível apagar' });
     } finally {
       setPurging(false);
     }
@@ -166,23 +196,28 @@ export default function Transactions() {
       const batches = await importBatchesAPI.list();
       setImportBatches(batches);
     } catch (error) {
-      console.error('Error loading import batches:', error);
-      alert(`Erro ao carregar importações: ${error.message}`);
+      toast.error(error.message, { title: 'Não foi possível listar as importações' });
     } finally {
       setLoadingBatches(false);
     }
   }
 
-  async function deleteBatch(id) {
-    if (!confirm('Apagar somente esta importação (arquivo)?')) return;
+  async function deleteBatch(batch) {
+    const ok = await confirm({
+      title: 'Apagar esta importação?',
+      message: `As ${batch._count?.transactions || 0} transações vindas de "${batch.filename}" serão removidas e os saldos recalculados.`,
+      confirmLabel: 'Apagar importação',
+    });
+    if (!ok) return;
+
     try {
-      await importBatchesAPI.delete(id);
+      const result = await importBatchesAPI.delete(batch.id);
       const batches = await importBatchesAPI.list();
       setImportBatches(batches);
       loadData();
+      toast.success(`${result.deletedTransactions} transações removidas.`);
     } catch (error) {
-      console.error('Error deleting import batch:', error);
-      alert(`Erro ao apagar importação: ${error.message}`);
+      toast.error(error.message, { title: 'Não foi possível apagar a importação' });
     }
   }
 
@@ -225,10 +260,12 @@ export default function Transactions() {
     return true;
   });
 
-  if (loading) {
+  if (loading) return <LoadingState label="Carregando transações…" />;
+
+  if (loadError) {
     return (
-      <div className="flex items-center justify-center h-64">
-        <div className="text-gray-500">Carregando...</div>
+      <div className="pt-6">
+        <ErrorState message={loadError} onRetry={loadData} />
       </div>
     );
   }
@@ -353,7 +390,7 @@ export default function Transactions() {
                       <Pencil size={18} />
                     </button>
                     <button
-                      onClick={() => handleDelete(transaction.id)}
+                      onClick={() => handleDelete(transaction)}
                       className="p-2 text-gray-400 hover:text-red-600"
                     >
                       <Trash2 size={18} />
@@ -642,7 +679,7 @@ export default function Transactions() {
                           {new Date(b.createdAt).toLocaleString('pt-BR')}
                         </div>
                       </div>
-                      <button className="btn btn-danger" onClick={() => deleteBatch(b.id)}>
+                      <button className="btn btn-danger" onClick={() => deleteBatch(b)}>
                         Apagar
                       </button>
                     </div>

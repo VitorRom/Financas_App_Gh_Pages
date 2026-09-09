@@ -44,3 +44,11 @@ export async function changePassword(req, res, next) {
     next(error);
   }
 }
+
+export async function completeOnboarding(req, res, next) {
+  try {
+    res.json(await service.completeOnboarding(req.user.id));
+  } catch (error) {
+    next(error);
+  }
+}

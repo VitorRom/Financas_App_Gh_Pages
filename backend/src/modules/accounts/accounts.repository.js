@@ -21,6 +21,22 @@ export function findById(id, userId) {
   });
 }
 
+/** Posições ativas vinculadas a alguma conta, para calcular o saldo de investimento. */
+export function findLinkedInvestments(userId) {
+  return prisma.investment.findMany({
+    where: { userId, isActive: true, accountId: { not: null } },
+    select: { accountId: true, quantity: true, averagePrice: true, currentPrice: true },
+  });
+}
+
+export function countByUser(userId) {
+  return prisma.account.count({ where: { userId } });
+}
+
+export function countTransactions(accountId) {
+  return prisma.transaction.count({ where: { accountId } });
+}
+
 export function create(data) {
   return prisma.account.create({ data });
 }

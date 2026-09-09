@@ -18,5 +18,6 @@ router.post('/login', authLimiter, validate(loginSchema), controller.login);
 router.get('/me', authMiddleware, controller.getMe);
 router.put('/profile', authMiddleware, validate(updateProfileSchema), controller.updateProfile);
 router.put('/password', authMiddleware, validate(changePasswordSchema), controller.changePassword);
+router.post('/onboarding/complete', authMiddleware, controller.completeOnboarding);
 
 export default router;

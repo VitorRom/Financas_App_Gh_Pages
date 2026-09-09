@@ -150,6 +150,9 @@ export async function importStatement(userId, file, accountId) {
     imported: createdIds.length,
     parsed: valid.length,
     skipped: valid.length - createdIds.length,
+    // Linhas que pareciam lançamento mas o parser não entendeu. Reportar é melhor
+    // que descartar em silêncio — o usuário precisa saber que faltou algo.
+    unrecognized: parsed.unrecognized || 0,
     accountId,
     importBatchId: batch.id,
     filename: batch.filename,

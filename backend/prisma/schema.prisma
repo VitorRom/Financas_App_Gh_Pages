@@ -14,6 +14,11 @@ model User {
   name                   String?                 @db.VarChar(255)
   createdAt              DateTime                @default(now()) @db.Timestamptz(6)
   updatedAt              DateTime                @updatedAt @db.Timestamptz(6)
+  /// Incrementado a cada troca de senha. Tokens emitidos antes deixam de valer.
+  tokenVersion           Int                     @default(0)
+  /// Quando o usuário concluiu (ou dispensou) a apresentação de primeiro uso.
+  /// Nulo = ainda não viu. Data em vez de booleano para saber também quando foi.
+  onboardingCompletedAt  DateTime?               @db.Timestamptz(6)
   accounts               Account[]
   categories             Category[]
   goals                  Goal[]
@@ -77,18 +82,21 @@ model Category {
 }
 
 model Account {
-  id            String        @id @default(uuid()) @db.Uuid
-  name          String        @db.VarChar(150)
-  type          String        @db.VarChar(50)
-  balance       Decimal       @default(0) @db.Decimal(14, 2)
-  color         String        @default("#10b981") @db.VarChar(30)
-  createdAt     DateTime      @default(now()) @db.Timestamptz(6)
-  updatedAt     DateTime      @updatedAt @db.Timestamptz(6)
-  userId        String        @db.Uuid
-  user          User          @relation(fields: [userId], references: [id], onDelete: Cascade)
-  importBatches ImportBatch[]
-  investments   Investment[]
-  transactions  Transaction[]
+  id             String        @id @default(uuid()) @db.Uuid
+  name           String        @db.VarChar(150)
+  type           String        @db.VarChar(50)
+  balance        Decimal       @default(0) @db.Decimal(14, 2)
+  /// Saldo de abertura da conta. O saldo corrente é initialBalance + soma das
+  /// transações; sem guardá-lo, um recálculo zeraria o valor informado na criação.
+  initialBalance Decimal       @default(0) @db.Decimal(14, 2)
+  color          String        @default("#10b981") @db.VarChar(30)
+  createdAt      DateTime      @default(now()) @db.Timestamptz(6)
+  updatedAt      DateTime      @updatedAt @db.Timestamptz(6)
+  userId         String        @db.Uuid
+  user           User          @relation(fields: [userId], references: [id], onDelete: Cascade)
+  importBatches  ImportBatch[]
+  investments    Investment[]
+  transactions   Transaction[]
 
   @@index([userId])
   @@index([userId, type])
@@ -108,7 +116,7 @@ model Transaction {
   categoryId       String?      @db.Uuid
   accountId        String?      @db.Uuid
   importBatchId    String?      @db.Uuid
-  account          Account?     @relation(fields: [accountId], references: [id])
+  account          Account?     @relation(fields: [accountId], references: [id], onDelete: SetNull)
   category         Category?    @relation(fields: [categoryId], references: [id])
   importBatch      ImportBatch? @relation(fields: [importBatchId], references: [id])
   user             User         @relation(fields: [userId], references: [id], onDelete: Cascade)
@@ -190,18 +198,24 @@ model GoalInstallment {
 }
 
 model PlanningItem {
-  id             String   @id @default(uuid()) @db.Uuid
-  name           String   @db.VarChar(255)
-  amount         Decimal  @db.Decimal(14, 2)
-  type           String   @db.VarChar(50)
-  dayOfMonth     Int      @default(1)
-  enabled        Boolean  @default(true)
-  createdAt      DateTime @default(now()) @db.Timestamptz(6)
-  updatedAt      DateTime @updatedAt @db.Timestamptz(6)
-  userId         String   @db.Uuid
+  id             String    @id @default(uuid()) @db.Uuid
+  name           String    @db.VarChar(255)
+  amount         Decimal   @db.Decimal(14, 2)
+  type           String    @db.VarChar(50)
+  dayOfMonth     Int       @default(1)
+  enabled        Boolean   @default(true)
+  createdAt      DateTime  @default(now()) @db.Timestamptz(6)
+  updatedAt      DateTime  @updatedAt @db.Timestamptz(6)
+  userId         String    @db.Uuid
   monthsDuration Int?
-  startMonth     Int?     @default(0)
-  user           User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  /// Mês de início, absoluto (primeiro dia do mês, em UTC).
+  /// Substituiu `startMonth`, que era um deslocamento relativo a "hoje" e por isso
+  /// empurrava o item para frente a cada virada de mês.
+  startDate      DateTime? @db.Timestamptz(6)
+  /// @deprecated substituído por `startDate`. Nada mais lê este campo; foi mantido
+  /// por um ciclo para permitir conferir o backfill antes de descartar a origem.
+  startMonth     Int?      @default(0)
+  user           User      @relation(fields: [userId], references: [id], onDelete: Cascade)
 
   @@index([userId])
   @@index([userId, enabled])
