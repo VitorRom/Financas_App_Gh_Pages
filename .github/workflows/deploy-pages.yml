@@ -29,9 +29,29 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      # Tenta habilitar o Pages pela API. Sem isso, o primeiro deploy falha com
+      # "Failed to create deployment (status: 404)" — que na verdade quer dizer
+      # "Pages não está ligado neste repositório".
+      - name: Habilitar o GitHub Pages
+        id: pages
+        continue-on-error: true
+        uses: actions/configure-pages@v5
+        with:
+          enablement: true
+
+      # Aviso, não erro: se o Pages já estiver ligado, a chamada acima pode falhar
+      # por permissão sem que haja problema algum. Quando realmente estiver desligado,
+      # quem falha é o job de deploy, com a mensagem própria dele.
+      - name: Pages não pôde ser habilitado automaticamente
+        if: steps.pages.outcome == 'failure'
+        run: |
+          echo "::warning title=Verifique o GitHub Pages::Se o deploy falhar, abra Settings -> Pages e selecione Source: GitHub Actions."
+          echo "https://github.com/${{ github.repository }}/settings/pages"
+
       - uses: actions/setup-node@v4
         with:
-          node-version: 20
+          # Node 20 saiu de suporte nos runners do GitHub.
+          node-version: 22
           cache: npm
           cache-dependency-path: frontend/package-lock.json
 
